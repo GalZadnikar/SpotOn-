@@ -209,7 +209,7 @@
 #.......T#
 #.......T#
 #.......X#
-#...#.H..<
+#...#PH..<
 #^^^######
 ---
 ..........
@@ -245,20 +245,28 @@
 ..0.....
 ........
 
-=== par=11 rating= note=generated, one colour, est. difficulty 2.1. Grow right 1, up 2 (wall trims it), right 1. One press too many spoils it.
-######
-#..XH#
-#..TT#
-#>XTT#
-#.TTT#
-#^####
+=== par=29 rating=5 note=Difficutl hard: you have to find correct order to get 2 between x and another x
+##v##########
+#.......XTTX#
+#...#.PHP...#
+#...........#
+#...........#
+#...........#
+#....#......#
+#...........#
+#....#......#
+###^#########
 ---
-......
-....0.
-...00.
-.0.00.
-..000.
-.0....
+..0..........
+.........00..
+......000....
+.............
+.............
+.............
+.............
+.............
+.............
+...0.........
 
 === par=11 rating= note=generated, one colour, est. difficulty 2.3. Grow right 2, down 1 (wall trims it), left 1 (trimmed).
 #########v#

@@ -157,6 +157,7 @@ namespace ExpandPuzzle
             if (ui != null)
             {
                 ui.BuildPicker(Levels.Count, i => Levels.Load(i).UsesColor, BestStars, IsUnlocked);
+                ui.AddPickerToggle("Swipe controls", () => GameInput.SwipeMode, () => GameInput.SwipeMode = !GameInput.SwipeMode);
                 ui.AddPickerToggle("Sound", () => GameAudio.Enabled, () => GameAudio.Enabled = !GameAudio.Enabled);
                 ui.AddPickerToggle("Vibration", () => Haptics.Enabled, () => { Haptics.Enabled = !Haptics.Enabled; Haptics.Medium(); });
                 if (fx != null)
@@ -169,6 +170,7 @@ namespace ExpandPuzzle
         {
             Vector2Int dir;
             bool isRepeat;
+            input.cellPixels = CellPixels();
             bool stepped = input.TryGetStep(out dir, out isRepeat);
 
             if (input.ToggleFxPressed && fx != null) fx.starParticlesOnWin = !fx.starParticlesOnWin;
@@ -180,6 +182,21 @@ namespace ExpandPuzzle
             if (input.BackPressed) { LoadLevel(m_LevelIndex - 1, true); return; }
 
             if (stepped) Step(dir, isRepeat);
+        }
+
+        /// <summary>
+        /// How big one cell looks on screen right now (pixels; x = a step sideways, y = a step up).
+        /// Swipe controls use it so that dragging a finger one cell far moves the blob one cell.
+        /// </summary>
+        Vector2 CellPixels()
+        {
+            Camera cam = cameraFramer != null && cameraFramer.cam != null ? cameraFramer.cam : Camera.main;
+            if (cam == null || m_Board == null) return Vector2.zero;
+            Vector3 here = cam.WorldToScreenPoint(m_Board.CellToWorld(m_Head, 0f));
+            Vector3 side = cam.WorldToScreenPoint(m_Board.CellToWorld(m_Head + Vector2Int.right, 0f));
+            Vector3 up = cam.WorldToScreenPoint(m_Board.CellToWorld(m_Head + Vector2Int.up, 0f));
+            if (here.z <= 0f || side.z <= 0f || up.z <= 0f) return Vector2.zero;
+            return new Vector2(((Vector2)(side - here)).magnitude, ((Vector2)(up - here)).magnitude);
         }
 
         // ---------------------------------------------------------------- levels
@@ -307,6 +324,7 @@ namespace ExpandPuzzle
                 m_Blob.MoveTo(m_Head, dir);
                 m_PumpStreak = 0;
                 sound.Play(sound.move);
+                Haptics.Tick();   // one tick per cell, so steps can be counted by feel
                 AfterChange();
                 return true;
             }

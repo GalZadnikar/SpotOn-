@@ -18,6 +18,9 @@ namespace ExpandPuzzle
             set { PlayerPrefs.SetInt(Key, value ? 1 : 0); PlayerPrefs.Save(); }
         }
 
+        /// <summary>The faintest tick: one per cell the blob moves.</summary>
+        public static void Tick() { Tap(8, 45); }
+
         /// <summary>Tiny tick: buttons, bumping a wall, a target clicking in.</summary>
         public static void Light() { Tap(12, 70); }
 
