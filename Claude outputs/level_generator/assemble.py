@@ -31,23 +31,15 @@ def make_note(c):
     if f['decoys']: tags.append('One pump is not needed.')
     return note + (' ' + ' '.join(tags) if tags else '')
 
-NEW_NOTES = {
-    6: "order matters: stretch to three at the side pump first, then stand on the floor pump where the wall above lets only one end grow.",
-    9: "three pumps in a chain: grow down to reach the green pump, along the corridor to reach the last one, then up into the green marks.",
-    10: "sculpt the L in the doorway: the wall lets only the lower cell grow sideways. The pump in the middle wall is not needed.",
-    14: "two marks far apart: grow to three, widen once at the side pump, then the wall lets only one column keep growing down. The right-hand room and its pump are not needed.",
-}
-
-orig = parse_file(open('levels_orig.txt').read())
-out = []
-for i, d in enumerate(orig[:14]):
-    d = dict(d)
-    if i + 1 in NEW_NOTES: d['note'] = NEW_NOTES[i + 1]
-    out.append(d)
+orig = parse_file(open('levels_now.txt').read())
 ch = json.load(open('chosen.json'))
-for n in ('1', '2', '3'):
-    for c in ch[n]:
-        out.append(dict(par=c['f']['par'], rating='', note=make_note(c), rows=c['rows'], colors=c['colors']))
+new = [dict(par=c['f']['par'], rating='', note=make_note(c), rows=c['rows'], colors=c['colors'], _c=c)
+       for n in ('1', '2', '3') for c in ch[n]]
+# every rated level is the designer's: it stays exactly as it is, in its place. Only unrated ones are replaced.
+out = [d for d in orig if d['rating'].strip()]
+KEPT = len(out)
+assert all(orig[i]['rating'].strip() for i in range(KEPT)), 'rated levels are not all at the front'
+out += new
 
 # verify everything with the port of Solver.cs
 bad = 0
@@ -71,5 +63,6 @@ for i, d in enumerate(out):
 print('problems:', bad, 'levels:', len(out))
 os.makedirs('/mnt/user-data/outputs', exist_ok=True)
 open('/mnt/user-data/outputs/Levels.txt', 'w', newline='\n').write(write_file(out))
+print('kept', KEPT, 'rated levels')
 for i, d in enumerate(out):
-    if i + 1 in NEW_NOTES or i >= 14: print('%d: %s' % (i + 1, d['note']))
+    if i >= KEPT: print('%d: T %d/%d  %s' % (i + 1, len(Level(d['rows'], d['colors']).targets), bin(Level(d['rows'], d['colors']).floor).count('1'), d['note']))

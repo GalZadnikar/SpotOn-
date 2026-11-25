@@ -1,13 +1,16 @@
 import json, sys, random
 from core import *
-from pick import load, ok, interest, est, tier_ok
+from pick import load, ok, interest, est, tier_ok, density
 from view import show, outline
 
 SLOTS = {
-    1: [2.0, 2.3, 2.7, 3.0, 3.0, 3.3, 3.9, 3.2, 3.7, 4.0, 4.2, 4.8, 4.3, 4.7, 5.0],
+    1: [2.0, 2.4, 2.8, 3.0, 3.3, 3.8, 3.2, 3.6, 4.0, 4.3, 4.7, 4.2, 4.7, 5.0],
     2: [1.3, 1.8, 2.2, 2.7, 3.0, 3.3, 3.9, 3.2, 3.8, 4.1, 4.8, 4.3, 4.8, 5.0],
     3: [1.8, 2.2, 2.8, 3.0, 3.3, 3.8, 4.0, 4.3, 4.7, 4.9, 5.1],
 }
+# slots that may be crowded (few, on purpose); every other slot must be roomy like the designer's own levels
+COMPACT = {1: {4, 9}, 2: {4, 10}, 3: {3, 8}}
+POOL = 'pool2'
 
 def regions(c):
     lv = Level(c['rows'], c['colors'])
@@ -33,7 +36,7 @@ def choose(ban=()):
     chosen = {}
     used_walls = set()
     for n in (1, 2, 3):
-        pool = [c for c in load('pool/c%d.jsonl' % n) if ok(c)]
+        pool = [c for c in load(POOL + '/c%d.jsonl' % n) if ok(c)]
         for c in pool: c['int'] = interest(c)
         picks = []
         sizes = {}
@@ -44,6 +47,11 @@ def choose(ban=()):
                 f = c['f']
                 if abs(est(f) - want) > 0.22 or not tier_ok(f, want): continue
                 if want >= 4.9 and f['states'] < 900: continue
+                dn = density(c)
+                if si in COMPACT[n]:
+                    if not (0.22 <= dn <= 0.42): continue
+                else:
+                    if dn > 0.2 or f['floor'] < (16 if want < 2.5 else 24): continue
                 key = '\n'.join(c['rows'])
                 if key in ban: continue
                 w = walls(c)
@@ -77,7 +85,7 @@ if __name__ == '__main__':
     ch = choose(ban)
     json.dump(ch, open('chosen.json', 'w'))
     only = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-    idx = 15
+    idx = 16
     for n in (1, 2, 3):
         for c in ch[n]:
             if not only or only == n: show(c, 'L%d [%dc want %.1f]' % (idx, n, c['want']))

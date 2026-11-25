@@ -3,7 +3,7 @@ import random, json, sys, time, math
 from core import *
 from graph import explore, analyse, popcount
 
-CW, CH = 9, 10      # largest interior
+CW, CH = 10, 10     # largest interior
 
 
 def carve_layout(rng):
@@ -19,10 +19,10 @@ def carve_layout(rng):
                     xx, yy = x + dx, y + dy
                     if 0 <= xx < CW and 0 <= yy < CH and g[yy][xx]: return True
         return False
-    w = rng.randint(3, 7); h = rng.randint(2, 6)
+    w = rng.randint(4, 9); h = rng.randint(3, 7)
     x0 = rng.randint(0, CW - w); y0 = rng.randint(0, CH - h)
     rect(x0, y0, w, h)
-    for _ in range(rng.choice([0, 1, 1, 2, 2, 3])):
+    for _ in range(rng.choice([0, 0, 1, 1, 2])):
         for _try in range(20):
             kind = rng.choice(['wing', 'wing', 'shaft', 'shaft', 'room'])
             if kind == 'wing': w2, h2 = rng.randint(2, 5), rng.randint(2, 4)
@@ -35,7 +35,7 @@ def carve_layout(rng):
             if touches(x2, y2, w2, h2):
                 rect(x2, y2, w2, h2); break
     # partition with a door
-    if rng.random() < 0.35:
+    if rng.random() < 0.25:
         for _try in range(10):
             if rng.random() < 0.5:
                 y = rng.randint(1, CH - 2)
@@ -54,7 +54,7 @@ def carve_layout(rng):
                         if y not in doors: g[y][x] = False
                     break
     # pillars
-    for _ in range(rng.choice([0, 0, 1, 1, 2, 3])):
+    for _ in range(rng.choice([0, 1, 1, 2, 2, 3, 4])):
         fl = [(x, y) for y in range(CH) for x in range(CW) if g[y][x]]
         if not fl: break
         x, y = rng.choice(fl)
@@ -75,7 +75,7 @@ def carve_layout(rng):
                         if 0 <= nx < CW and 0 <= ny < CH and g[ny][nx] and (nx, ny) not in seen:
                             seen.add((nx, ny)); comp.append((nx, ny))
                 if len(comp) > len(best): best = comp
-    if len(best) < 9: return None
+    if len(best) < 16: return None
     xs = [c[0] for c in best]; ys = [c[1] for c in best]
     W = max(xs) - min(xs) + 3; H = max(ys) - min(ys) + 3
     grid = [['#'] * W for _ in range(H)]
@@ -111,7 +111,7 @@ def place_pumps(rng, grid, n, ncol):
     return [(x, y, ch, c) for (x, y, ch), c in zip(pumps, cols)]
 
 
-def build(grid, pumps, head, targets=None, forbidden=(), ncol=1):
+def build(grid, pumps, head, targets=None, forbidden=(), ncol=1, body=()):
     """targets: dict (x,y)->colour"""
     H = len(grid); W = len(grid[0])
     m = [row[:] for row in grid]
@@ -119,6 +119,7 @@ def build(grid, pumps, head, targets=None, forbidden=(), ncol=1):
     for x, y, ch, col in pumps:
         m[y][x] = ch; c[y][x] = str(col)
     m[head[1]][head[0]] = 'H'; c[head[1]][head[0]] = '0'
+    for x, y in body: m[y][x] = 'P'; c[y][x] = '0'
     for (x, y), col in (targets or {}).items():
         m[y][x] = 'T'; c[y][x] = str(col)
     for x, y in forbidden: m[y][x] = 'X'
@@ -131,12 +132,12 @@ def bits_of(lv, cells):
     return b
 
 
-def candidates(rng, ncol, want_big=False, max_states=5000):
+def candidates(rng, ncol, want_big=False, max_states=9000):
     """Yield scored levels built on one random layout."""
     grid = carve_layout(rng)
     if grid is None: return []
     H = len(grid); W = len(grid[0])
-    if W > 11 or H > 12: return []
+    if W > 12 or H > 12: return []
     if ncol == 1: n = rng.choice([1, 2, 2, 2, 3, 3, 4])
     elif ncol == 2: n = rng.choice([1, 2, 2, 2, 3, 3, 4])
     else: n = rng.choice([2, 3, 3, 3, 4])
@@ -144,7 +145,15 @@ def candidates(rng, ncol, want_big=False, max_states=5000):
     if pumps is None: return []
     fl = [(x, y) for y in range(H) for x in range(W) if grid[y][x] == '.']
     head = rng.choice(fl)
-    rows, cols = build(grid, pumps, head)
+    body = []
+    if rng.random() < 0.15:                 # start as a small bar, like the designer's later levels
+        dx, dy = rng.choice(((1, 0), (0, 1)))
+        for k in range(1, rng.choice([2, 2, 3])):
+            q = (head[0] + dx * k, head[1] + dy * k)
+            if q in fl: body.append(q)
+            else: break
+    nfloor = len(fl)
+    rows, cols = build(grid, pumps, head, body=body)
     lv = Level(rows, cols)
     G = explore(lv, max_states)
     if G is None: return []
@@ -161,8 +170,9 @@ def candidates(rng, ncol, want_big=False, max_states=5000):
             if press[i] + w < press[j]:
                 press[j] = press[i] + w
                 (dq.appendleft if w == 0 else dq.append)(j)
-    headbit = 1 << (head[1] * W + head[0])
-    pool = [i for i in range(N) if 2 <= press[i] <= 12 and not (sum(states[i]) & headbit) and all(states[i][c] for c in range(ncol))
+    headbit = 0
+    for q in [head] + body: headbit |= 1 << (q[1] * W + q[0])
+    pool = [i for i in range(N) if 1 <= press[i] <= 12 and not (sum(states[i]) & headbit) and all(states[i][c] for c in range(ncol))
             and popcount(sum(states[i])) <= 24]
     if ncol == 1 and rng.random() < 0.15:
         pool += [i for i in range(N) if press[i] == 1 and not (sum(states[i]) & headbit)]
@@ -191,6 +201,20 @@ def candidates(rng, ncol, want_big=False, max_states=5000):
                 c3 = rng.choice(cl); T[c3] = cells[c3]
         if len(set(T.values())) < ncol or len(T) < 2:
             T = dict(cells); mode = 'full'
+        # open levels: few marks in a lot of room (a small share of crowded ones is let through)
+        if len(T) > max(2, 0.2 * nfloor) and rng.random() < 0.9:
+            cl = list(cells)
+            T = None
+            for _t in range(6):
+                a = rng.choice(cl)
+                line = [c for c in cl if c[1] == a[1]] if rng.random() < 0.5 else [c for c in cl if c[0] == a[0]]
+                cand = {c: cells[c] for c in line}
+                if len(line) < 2:
+                    b = max(cl, key=lambda c: abs(c[0] - a[0]) + abs(c[1] - a[1]))
+                    cand = {a: cells[a], b: cells[b]}
+                if 2 <= len(cand) <= max(2, 0.2 * nfloor) and len(set(cand.values())) == ncol:
+                    T = cand; mode = 'line'; break
+            if T is None: continue
         tb = bits_of(lv, T)
         tcol = [bits_of(lv, [c for c, v in T.items() if v == k]) for k in range(ncol)]
         # other reachable positions that would also win: collect what they cover beyond the goal blob
@@ -225,7 +249,7 @@ def candidates(rng, ncol, want_big=False, max_states=5000):
         if xmode == 'hit' and rem and mode == 'full' and rng.random() < 0.7:
             continue        # shape could not be pinned down
         Xc = [(i % W, i // W) for i in range(W * H) if (X >> i) & 1]
-        rows2, cols2 = build(grid, pumps, head, T, Xc)
+        rows2, cols2 = build(grid, pumps, head, T, Xc, body=body)
         lv2 = Level(rows2, cols2)
         f = analyse(lv2, G)
         if f is None: continue
@@ -238,7 +262,7 @@ def candidates(rng, ncol, want_big=False, max_states=5000):
             dropcells = set((lv2.pumps[i][0], lv2.pumps[i][1]) for i in drop)
             pumps2 = [p for p in pumps if (p[0], p[1]) not in dropcells]
             if ncol > 1 and set(range(1, ncol)) - set(p[3] for p in pumps2): continue
-            rows2, cols2 = build(grid, pumps2, head, T, Xc)
+            rows2, cols2 = build(grid, pumps2, head, T, Xc, body=body)
             lv2 = Level(rows2, cols2)
             f = analyse(lv2, None, max_states)
             if f is None: continue

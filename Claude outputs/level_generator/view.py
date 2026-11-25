@@ -15,8 +15,8 @@ def outline(lv, f):
     return ', '.join(parts)
 def show(c, tag=''):
     f = c['f']; lv = Level(c['rows'], c['colors'])
-    print('%s est %.1f (model %.1f) int %.1f | par %d presses %d pumps %d decoy %d | trim %d sw %d traps %d bits %.1f prand %.2f over %d | states %d wins %d mode %s' % (
-        tag, est(f), f['rating'], interest(c), f['par'], f['presses'], f['pumps'], f['decoys'], f['partial'], f['switches'], f['traps'], f['bits'], f['p_random'], f['over'], f['states'], f['win_comps'], f['mode']))
+    print('%s est %.1f (model %.1f) int %.1f | par %d presses %d pumps %d decoy %d | trim %d sw %d traps %d bits %.1f prand %.2f over %d | states %d wins %d mode %s T %d/%d' % (
+        tag, est(f), f['rating'], interest(c), f['par'], f['presses'], f['pumps'], f['decoys'], f['partial'], f['switches'], f['traps'], f['bits'], f['p_random'], f['over'], f['states'], f['win_comps'], f['mode'], f['targets'], f['floor']))
     print('   ' + outline(lv, f))
     fin = lv.render(tuple(f['final'])).split('\n')
     for i, r in enumerate(c['rows']):

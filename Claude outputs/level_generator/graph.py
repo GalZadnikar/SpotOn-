@@ -162,7 +162,7 @@ def predict(f):
     S = math.log2(f['states'])                                  # how much there is to explore
     R = min(6.0, -math.log2(max(f['p_random'], 1e-3)))          # how unlikely blind pumping is to win
     W = math.log2(1 + f['walk'])                                # carrying the shape around
-    return -1.78 + 0.35 * S + 0.17 * R + 0.32 * f['pumps'] + 0.34 * W
+    return -1.73 + 0.33 * S + 0.24 * R + 0.24 * f['pumps'] + 0.39 * W     # refitted on levels 1-15
 
 
 if __name__ == '__main__':

@@ -16,10 +16,10 @@ def est(f):
     return max(f['rating'], 1.5 + 0.6 * min(f['bits'], 4.5))
 
 TIERS = [  # want-range, bits range, states range, max presses
-    (0.0, 2.5, (0.0, 1.2), (40, 260), 6),
-    (2.5, 3.5, (1.5, 3.6), (110, 480), 7),
-    (3.5, 4.5, (2.5, 6.5), (180, 1300), 9),
-    (4.5, 9.9, (3.0, 99.0), (380, 99999), 12),
+    (0.0, 2.5, (0.0, 1.2), (40, 300), 6),
+    (2.5, 3.5, (1.0, 3.6), (110, 700), 7),
+    (3.5, 4.5, (1.5, 6.5), (200, 2500), 9),
+    (4.5, 9.9, (1.5, 99.0), (400, 99999), 12),
 ]
 def tier_ok(f, want):
     for lo, hi, (b0, b1), (s0, s1), pmax in TIERS:
@@ -34,10 +34,12 @@ def ok(c):
     if f['targets'] > 9 or f['final_cells'] > 16: return False
     if f['presses'] > 12 or f['xcount'] > 5 or f['decoys'] > 1: return False
     if f['floor'] < 12: return False
-    if f['footprint'] / f['floor'] < 0.3: return False
+    if f['footprint'] / f['floor'] < 0.2: return False
     if est(f) >= 2.6 and f['pumps_used'] < 2: return False
-    if f['mode'] != 'full' and f['final_cells'] > 2.5 * f['targets'] + 2: return False
     return True
+
+def density(c):
+    return c['f']['targets'] / c['f']['floor']
 
 def interest(c):
     f = c['f']; rows = c['rows']
