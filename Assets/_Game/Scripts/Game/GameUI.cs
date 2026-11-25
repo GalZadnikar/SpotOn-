@@ -4,7 +4,7 @@ using UnityEngine.UI;
 
 namespace ExpandPuzzle
 {
-    /// <summary>The HUD: level name, live star rating, undo / restart, the win card and the debug level picker.</summary>
+    /// <summary>The HUD: level name, live star rating, undo / restart, the win card and the level overview.</summary>
     public class GameUI : MonoBehaviour
     {
         [Header("Top bar")]
@@ -22,8 +22,24 @@ namespace ExpandPuzzle
         public Text winMovesLabel;
         public Image[] winStars;
 
-        [Header("Level picker (debug)")]
+        [Header("Win card star effects")]
+        [Tooltip("Optional: a three-star prefab from Epic Victory Effects (Prefabs/Star_0X/Star_0X_Anim_YY). Empty = plain stars.")]
+        public GameObject starEffectPrefab;
+        [Tooltip("Where the effect is created: a child of the win card. The card must be on a camera canvas for particles to show.")]
+        public RectTransform starEffectAnchor;
+        [Tooltip("Size of the effect: canvas units per unit of the prefab (its stars are 1.1 apart).")]
+        public float starEffectScale = 136f;
+        [Tooltip("Seconds between one star and the next.")]
+        public float starEffectGap = 0.3f;
+        [Tooltip("Sorting order of the particles; must be above the win card's canvas.")]
+        public int starEffectSortingOrder = 10;
+
+        [Header("Level overview (tap the level name)")]
         public bool debugLevelPicker = true;
+        [Tooltip("How many levels one page of the overview shows (5 columns).")]
+        public int levelsPerPage = 25;
+        [Tooltip("Star used on the level buttons. Empty = same as the HUD stars.")]
+        public Sprite starSprite;
         public GameObject pickerRoot;
         public RectTransform pickerGrid;
         public Button pickerCloseButton;
@@ -39,6 +55,8 @@ namespace ExpandPuzzle
         public event Action UndoClicked;
         public event Action RestartClicked;
         public event Action<int> LevelPicked;
+        /// <summary>A star just landed on the win card (0, 1, 2).</summary>
+        public event Action<int> WinStarShown;
 
         static readonly string[] Cheers = { "Nice!", "Snug fit!", "Perfect!", "Well pumped!", "Squish!" };
 
@@ -55,6 +73,9 @@ namespace ExpandPuzzle
             if (restartButton != null) restartButton.onClick.AddListener(() => { if (RestartClicked != null) RestartClicked(); });
             if (levelButton != null) levelButton.onClick.AddListener(TogglePicker);
             if (pickerCloseButton != null) pickerCloseButton.onClick.AddListener(ClosePicker);
+            // Buttons dip under the finger.
+            PressScale.AddTo(undoButton);
+            PressScale.AddTo(restartButton);
             if (winBanner != null) winBanner.gameObject.SetActive(false);
             if (pickerRoot != null) pickerRoot.SetActive(false);
             if (fader != null) fader.enabled = false;
@@ -64,7 +85,23 @@ namespace ExpandPuzzle
 
         public void SetLevel(int number, int total)
         {
-            if (levelLabel != null) levelLabel.text = "LEVEL " + number;
+            if (levelLabel != null)
+            {
+                // A new level number pops in: the old one stays for the first half of the pop, then flips.
+                string text = "LEVEL " + number;
+                if (m_LevelShown > 0 && m_LevelShown != number)
+                {
+                    m_LevelText = text;
+                    m_LevelPop = 1f;
+                }
+                else
+                {
+                    levelLabel.text = text;
+                    m_LevelText = null;
+                }
+                m_LevelShown = number;
+            }
+            m_CurrentLevel = number - 1;
             HideWin();
             ClosePicker();
         }
@@ -81,12 +118,94 @@ namespace ExpandPuzzle
                 {
                     if (hudStars[i] == null) continue;
                     bool on = i < stars;
+                    // Losing a star during play: the gold star drops off, the empty slot stays.
+                    if (!on && i < m_HudStars && moves > 0) DropStar(hudStars[i]);
                     hudStars[i].color = on ? starOn : starOff;
                     // A star that was just lost (or won back) gives a little kick.
                     if ((i < m_HudStars) != on && i < m_HudPunch.Length) m_HudPunch[i] = 1f;
                 }
             }
             m_HudStars = stars;
+        }
+
+        // ---------------------------------------------------------------- juice
+
+        int m_LevelShown;
+        string m_LevelText;
+        float m_LevelPop;
+
+        class FallingStar
+        {
+            public RectTransform rect;
+            public Image image;
+            public Vector2 velocity;
+            public float spin;
+            public float age;
+        }
+
+        readonly System.Collections.Generic.List<FallingStar> m_Falling = new System.Collections.Generic.List<FallingStar>();
+
+        /// <summary>A gold copy of a HUD star pops up, tumbles down and fades.</summary>
+        void DropStar(Image source)
+        {
+            if (source == null) return;
+            var go = new GameObject("Lost Star", typeof(RectTransform));
+            var rect = go.GetComponent<RectTransform>();
+            rect.SetParent(source.rectTransform.parent, false);
+            rect.anchorMin = source.rectTransform.anchorMin;
+            rect.anchorMax = source.rectTransform.anchorMax;
+            rect.pivot = source.rectTransform.pivot;
+            rect.anchoredPosition = source.rectTransform.anchoredPosition;
+            rect.sizeDelta = source.rectTransform.sizeDelta;
+            var image = go.AddComponent<Image>();
+            image.sprite = source.sprite;
+            image.color = starOn;
+            image.raycastTarget = false;
+            m_Falling.Add(new FallingStar
+            {
+                rect = rect,
+                image = image,
+                velocity = new Vector2(UnityEngine.Random.Range(-140f, 140f), 520f),
+                spin = UnityEngine.Random.Range(-420f, 420f)
+            });
+        }
+
+        void UpdateJuice(float dt)
+        {
+            for (int i = m_Falling.Count - 1; i >= 0; i--)
+            {
+                FallingStar f = m_Falling[i];
+                f.age += dt;
+                f.velocity.y -= 2600f * dt;
+                f.rect.anchoredPosition += f.velocity * dt;
+                f.rect.localRotation = Quaternion.Euler(0f, 0f, f.spin * f.age);
+                Color c = starOn;
+                c.a = Mathf.Clamp01(1f - (f.age - 0.35f) / 0.4f);
+                f.image.color = c;
+                if (f.age > 0.8f)
+                {
+                    Destroy(f.rect.gameObject);
+                    m_Falling.RemoveAt(i);
+                }
+            }
+
+            if (levelLabel != null && m_LevelPop > 0f)
+            {
+                m_LevelPop = Mathf.MoveTowards(m_LevelPop, 0f, dt * 2.6f);
+                if (m_LevelText != null && m_LevelPop <= 0.55f)
+                {
+                    levelLabel.text = m_LevelText;
+                    m_LevelText = null;
+                }
+                float k = Mathf.Sin((1f - m_LevelPop) * Mathf.PI);
+                levelLabel.rectTransform.localScale = Vector3.one * (1f + 0.28f * k);
+                levelLabel.rectTransform.localRotation = Quaternion.Euler(0f, 0f, Mathf.Sin(m_LevelPop * 16f) * 4f * m_LevelPop);
+                if (m_LevelPop <= 0f)
+                {
+                    levelLabel.rectTransform.localScale = Vector3.one;
+                    levelLabel.rectTransform.localRotation = Quaternion.identity;
+                }
+            }
         }
 
         /// <summary>Text colour that sits well on the current board colour.</summary>
@@ -120,7 +239,9 @@ namespace ExpandPuzzle
             }
             if (winMovesLabel != null) winMovesLabel.text = moves + (moves == 1 ? " move" : " moves");
             m_WinStars = stars;
-            if (winStars != null)
+            m_PlainStarsShown = 0;
+            SpawnStarEffect();
+            if (winStars != null && m_StarEffect == null)
             {
                 for (int i = 0; i < winStars.Length; i++)
                 {
@@ -137,7 +258,69 @@ namespace ExpandPuzzle
         public void HideWin()
         {
             m_BannerTime = -1f;
+            if (m_StarEffect != null) Destroy(m_StarEffect);
+            m_StarEffect = null;
             if (winBanner != null) winBanner.gameObject.SetActive(false);
+        }
+
+        // ---------------------------------------------------------------- win card star effects
+
+        GameObject m_StarEffect;
+        int m_PlainStarsShown;   // bit per plain star that already announced itself
+        readonly Transform[] m_EffectStars = new Transform[3];
+
+        /// <summary>Extra time the win card needs on screen so the last star effect can finish.</summary>
+        public float WinExtraTime { get { return starEffectPrefab != null && starEffectAnchor != null ? 0.9f : 0f; } }
+
+        /// <summary>
+        /// Puts the three-star effect on the win card with all its stars switched off; Update switches the
+        /// earned ones on one by one. The plain star images stay underneath as empty slots.
+        /// </summary>
+        void SpawnStarEffect()
+        {
+            if (m_StarEffect != null) Destroy(m_StarEffect);
+            m_StarEffect = null;
+            if (starEffectPrefab == null || starEffectAnchor == null) return;
+
+            m_StarEffect = Instantiate(starEffectPrefab, starEffectAnchor, false);
+            Transform root = m_StarEffect.transform;
+            root.localPosition = Vector3.zero;
+            root.localRotation = Quaternion.identity;
+            root.localScale = Vector3.one * starEffectScale;
+
+            // The pack's own controller polls the old Input class; we drive the stars ourselves.
+            foreach (var script in m_StarEffect.GetComponents<MonoBehaviour>())
+            {
+                script.enabled = false;
+                Destroy(script);
+            }
+
+            foreach (var t in m_StarEffect.GetComponentsInChildren<Transform>(true))
+                t.gameObject.layer = starEffectAnchor.gameObject.layer;
+            foreach (var ps in m_StarEffect.GetComponentsInChildren<ParticleSystem>(true))
+            {
+                var main = ps.main;
+                main.scalingMode = ParticleSystemScalingMode.Hierarchy;
+                var r = ps.GetComponent<ParticleSystemRenderer>();
+                if (r != null) r.sortingOrder = starEffectSortingOrder;
+            }
+
+            for (int i = 0; i < m_EffectStars.Length; i++)
+            {
+                m_EffectStars[i] = i < root.childCount ? root.GetChild(i) : null;
+                if (m_EffectStars[i] == null) continue;
+                m_EffectStars[i].gameObject.SetActive(false);
+
+                // Empty slot under each star, exactly where the effect will put it.
+                if (winStars == null || i >= winStars.Length || winStars[i] == null) continue;
+                RectTransform slot = winStars[i].rectTransform;
+                Vector3 p = m_EffectStars[i].localPosition * starEffectScale;
+                slot.anchoredPosition = starEffectAnchor.anchoredPosition + new Vector2(p.x, p.y);
+                slot.sizeDelta = Vector2.one * starEffectScale * 0.8f;
+                slot.localScale = Vector3.one;
+                slot.localRotation = Quaternion.identity;
+                winStars[i].color = new Color(0f, 0f, 0f, 0.1f);
+            }
         }
 
         /// <summary>0 = clear, 1 = screen fully covered with <paramref name="color"/>.</summary>
@@ -158,6 +341,7 @@ namespace ExpandPuzzle
         void Update()
         {
             float dt = Time.unscaledDeltaTime;
+            UpdateJuice(dt);
 
             if (hudStars != null)
             {
@@ -176,7 +360,19 @@ namespace ExpandPuzzle
             winBanner.localScale = Vector3.one * OutBack(m_BannerTime / 0.35f);
 
             // Stars land one after another.
-            if (winStars != null)
+            if (m_StarEffect != null)
+            {
+                for (int i = 0; i < m_EffectStars.Length && i < m_WinStars; i++)
+                {
+                    if (m_EffectStars[i] == null || m_EffectStars[i].gameObject.activeSelf) continue;
+                    if (m_BannerTime >= 0.15f + i * starEffectGap)
+                    {
+                        m_EffectStars[i].gameObject.SetActive(true);
+                        if (WinStarShown != null) WinStarShown(i);
+                    }
+                }
+            }
+            else if (winStars != null)
             {
                 for (int i = 0; i < winStars.Length; i++)
                 {
@@ -184,6 +380,11 @@ namespace ExpandPuzzle
                     float local = m_BannerTime - (0.3f + i * 0.2f);
                     if (local < 0f) continue;
                     bool earned = i < m_WinStars;
+                    if (earned && (m_PlainStarsShown & (1 << i)) == 0)
+                    {
+                        m_PlainStarsShown |= 1 << i;
+                        if (WinStarShown != null) WinStarShown(i);
+                    }
                     winStars[i].color = earned ? starOn : new Color(0f, 0f, 0f, 0.1f);
                     float s = earned ? OutBack(local / 0.3f) * (1f + 0.25f * Mathf.Max(0f, 1f - local / 0.3f)) : 0.8f;
                     winStars[i].rectTransform.localScale = Vector3.one * s;
@@ -192,45 +393,188 @@ namespace ExpandPuzzle
             }
         }
 
-        // ---------------------------------------------------------------- level picker
+        // ---------------------------------------------------------------- level overview
 
-        /// <summary>Creates one button per level. <paramref name="usesColor"/> marks the coloured-pump levels.</summary>
-        public void BuildPicker(int levelCount, Func<int, bool> usesColor)
+        class PickerEntry
+        {
+            public GameObject go;
+            public Image background;
+            public Button button;
+            public Text label;
+            public Image[] stars;
+            public bool colored;
+        }
+
+        readonly System.Collections.Generic.List<PickerEntry> m_Entries = new System.Collections.Generic.List<PickerEntry>();
+        readonly System.Collections.Generic.List<Image> m_Tabs = new System.Collections.Generic.List<Image>();
+        Func<int, int> m_StarsOf;
+        Func<int, bool> m_Unlocked;
+        int m_Page;
+        int m_CurrentLevel;
+
+        static readonly Color PickerInk = new Color(0.2f, 0.26f, 0.3f, 1f);
+        static readonly Color PickerGold = new Color(1f, 0.78f, 0.18f, 1f);
+
+        /// <summary>
+        /// Creates the level overview: one button per level with its best star rating, shown in pages.
+        /// <paramref name="starsOf"/> gives the best stars so far (0 = not solved yet),
+        /// <paramref name="unlocked"/> says whether a level may be played (null = all open).
+        /// </summary>
+        public void BuildPicker(int levelCount, Func<int, bool> usesColor, Func<int, int> starsOf = null, Func<int, bool> unlocked = null)
         {
             if (m_PickerBuilt || pickerGrid == null) return;
             m_PickerBuilt = true;
+            m_StarsOf = starsOf;
+            m_Unlocked = unlocked;
+
+            Transform panel = pickerGrid.parent;
+            Image panelImage = panel != null ? panel.GetComponent<Image>() : null;
+            Sprite square = panelImage != null && panelImage.sprite != null ? panelImage.sprite : pickerButtonSprite;
+            Sprite star = starSprite != null ? starSprite : (hudStars != null && hudStars.Length > 0 && hudStars[0] != null ? hudStars[0].sprite : null);
+            Font useFont = font != null ? font : (levelLabel != null ? levelLabel.font : null);
+
+            Transform title = panel != null ? panel.Find("Title") : null;
+            if (title != null && title.GetComponent<Text>() != null) title.GetComponent<Text>().text = "SELECT LEVEL";
+
+            // Room under each button for the stars that hang over its bottom edge.
+            var grid = pickerGrid.GetComponent<GridLayoutGroup>();
+            if (grid != null) grid.spacing = new Vector2(grid.spacing.x, 46f);
 
             for (int i = 0; i < levelCount; i++)
             {
                 int index = i;
-                var go = new GameObject("Level " + (i + 1), typeof(RectTransform));
-                go.transform.SetParent(pickerGrid, false);
-                var img = go.AddComponent<Image>();
-                img.sprite = pickerButtonSprite;
-                bool colored = usesColor != null && usesColor(i);
-                img.color = colored ? new Color(0.78f, 0.95f, 0.8f, 1f) : new Color(0.93f, 0.95f, 0.97f, 1f);
-                var button = go.AddComponent<Button>();
-                button.targetGraphic = img;
-                button.onClick.AddListener(() =>
+                var entry = new PickerEntry();
+                entry.colored = usesColor != null && usesColor(i);
+
+                entry.go = new GameObject("Level " + (i + 1), typeof(RectTransform));
+                entry.go.transform.SetParent(pickerGrid, false);
+                entry.background = entry.go.AddComponent<Image>();
+                entry.background.sprite = square;
+                entry.background.type = Image.Type.Sliced;
+                entry.button = entry.go.AddComponent<Button>();
+                entry.button.targetGraphic = entry.background;
+                PressScale.AddTo(entry.button);
+                entry.button.onClick.AddListener(() =>
                 {
                     ClosePicker();
                     if (LevelPicked != null) LevelPicked(index);
                 });
 
-                var textGo = new GameObject("Label", typeof(RectTransform));
-                textGo.transform.SetParent(go.transform, false);
-                var rt = textGo.GetComponent<RectTransform>();
-                rt.anchorMin = Vector2.zero;
-                rt.anchorMax = Vector2.one;
-                rt.offsetMin = rt.offsetMax = Vector2.zero;
-                var text = textGo.AddComponent<Text>();
-                text.font = font != null ? font : (levelLabel != null ? levelLabel.font : null);
-                text.text = (i + 1).ToString();
-                text.fontSize = 52;
-                text.fontStyle = FontStyle.Bold;
-                text.alignment = TextAnchor.MiddleCenter;
-                text.color = new Color(0.2f, 0.26f, 0.3f, 1f);
-                text.raycastTarget = false;
+                entry.label = PickerText(entry.go.transform, useFont, (i + 1).ToString(), 52);
+                entry.label.rectTransform.offsetMin = new Vector2(0f, 18f);
+
+                entry.stars = new Image[3];
+                for (int s = 0; s < 3; s++)
+                {
+                    var starGo = new GameObject("Star " + (s + 1), typeof(RectTransform));
+                    starGo.transform.SetParent(entry.go.transform, false);
+                    var rt = starGo.GetComponent<RectTransform>();
+                    rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0f);
+                    rt.pivot = new Vector2(0.5f, 0.5f);
+                    rt.anchoredPosition = new Vector2((s - 1) * 42f, s == 1 ? -4f : 8f);
+                    rt.sizeDelta = new Vector2(44f, 44f);
+                    var img = starGo.AddComponent<Image>();
+                    img.sprite = star;
+                    img.raycastTarget = false;
+                    entry.stars[s] = img;
+                }
+                m_Entries.Add(entry);
+            }
+
+            // Page tabs ("1-25", "26-50", ...) right under the grid; only needed with more than one page.
+            int pages = PageCount;
+            if (pages > 1 && panel != null)
+            {
+                var row = new GameObject("Pages", typeof(RectTransform));
+                row.transform.SetParent(panel, false);
+                row.transform.SetSiblingIndex(pickerGrid.GetSiblingIndex() + 1);
+                var hlg = row.AddComponent<HorizontalLayoutGroup>();
+                hlg.spacing = 20f;
+                hlg.childAlignment = TextAnchor.MiddleCenter;
+                hlg.childControlWidth = true;
+                hlg.childControlHeight = true;
+                hlg.childForceExpandWidth = true;
+                hlg.childForceExpandHeight = true;
+                row.AddComponent<LayoutElement>().preferredHeight = 100f;
+
+                for (int p = 0; p < pages; p++)
+                {
+                    int page = p;
+                    var tabGo = new GameObject("Page " + (p + 1), typeof(RectTransform));
+                    tabGo.transform.SetParent(row.transform, false);
+                    var img = tabGo.AddComponent<Image>();
+                    img.sprite = square;
+                    img.type = Image.Type.Sliced;
+                    var button = tabGo.AddComponent<Button>();
+                    button.targetGraphic = img;
+                    PressScale.AddTo(button);
+                    button.onClick.AddListener(() => { m_Page = page; RefreshPicker(); });
+                    int first = p * PerPage + 1;
+                    int last = Mathf.Min(levelCount, (p + 1) * PerPage);
+                    PickerText(tabGo.transform, useFont, first + " - " + last, 36);
+                    m_Tabs.Add(img);
+                }
+            }
+
+            RefreshPicker();
+        }
+
+        int PerPage { get { return Mathf.Max(1, levelsPerPage); } }
+        int PageCount { get { return Mathf.Max(1, (m_Entries.Count + PerPage - 1) / PerPage); } }
+
+        static Text PickerText(Transform parent, Font useFont, string value, int size)
+        {
+            var textGo = new GameObject("Label", typeof(RectTransform));
+            textGo.transform.SetParent(parent, false);
+            var rt = textGo.GetComponent<RectTransform>();
+            rt.anchorMin = Vector2.zero;
+            rt.anchorMax = Vector2.one;
+            rt.offsetMin = rt.offsetMax = Vector2.zero;
+            var text = textGo.AddComponent<Text>();
+            text.font = useFont;
+            text.text = value;
+            text.fontSize = size;
+            text.fontStyle = FontStyle.Bold;
+            text.alignment = TextAnchor.MiddleCenter;
+            text.color = PickerInk;
+            text.raycastTarget = false;
+            return text;
+        }
+
+        /// <summary>Shows the current page and brings stars, locks and the "you are here" mark up to date.</summary>
+        public void RefreshPicker()
+        {
+            m_Page = Mathf.Clamp(m_Page, 0, PageCount - 1);
+            for (int i = 0; i < m_Entries.Count; i++)
+            {
+                PickerEntry e = m_Entries[i];
+                bool onPage = i / PerPage == m_Page;
+                if (e.go.activeSelf != onPage) e.go.SetActive(onPage);
+                if (!onPage) continue;
+
+                int stars = m_StarsOf != null ? m_StarsOf(i) : 0;
+                bool open = m_Unlocked == null || m_Unlocked(i);
+                bool current = i == m_CurrentLevel;
+
+                e.button.interactable = open;
+                Color back = e.colored ? new Color(0.78f, 0.95f, 0.8f, 1f) : new Color(0.93f, 0.95f, 0.97f, 1f);
+                if (current) back = PickerInk;
+                e.background.color = back;
+                Color ink = current ? Color.white : PickerInk;
+                ink.a = open ? 1f : 0.3f;
+                e.label.color = ink;
+                for (int s = 0; s < e.stars.Length; s++)
+                {
+                    e.stars[s].enabled = open;
+                    e.stars[s].color = s < stars ? PickerGold : new Color(0.72f, 0.75f, 0.78f, 1f);
+                }
+            }
+            for (int p = 0; p < m_Tabs.Count; p++)
+            {
+                bool on = p == m_Page;
+                m_Tabs[p].color = on ? PickerInk : new Color(0.93f, 0.95f, 0.97f, 1f);
+                Text label = m_Tabs[p].GetComponentInChildren<Text>();
+                if (label != null) label.color = on ? Color.white : PickerInk;
             }
         }
 
@@ -278,7 +622,10 @@ namespace ExpandPuzzle
         {
             if (!debugLevelPicker || pickerRoot == null) return;
             pickerRoot.SetActive(!pickerRoot.activeSelf);
-            if (pickerRoot.activeSelf && m_ToggleRefresh != null) m_ToggleRefresh();
+            if (!pickerRoot.activeSelf) return;
+            m_Page = m_CurrentLevel / PerPage;   // open on the page of the level being played
+            RefreshPicker();
+            if (m_ToggleRefresh != null) m_ToggleRefresh();
         }
 
         public void ClosePicker()

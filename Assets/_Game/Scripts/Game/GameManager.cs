@@ -24,6 +24,8 @@ namespace ExpandPuzzle
         public int startLevel = 0;
         [Tooltip("Continue from the last level reached instead of Start Level.")]
         public bool rememberProgress = false;
+        [Tooltip("Level overview: a level stays locked until the one before it is solved. Off while testing.")]
+        public bool lockLevels = false;
         [Tooltip("How long the celebration lasts before the next level.")]
         public float nextLevelDelay = 1.5f;
         [Tooltip("Turn each level the way that shows it biggest on this screen.")]
@@ -31,7 +33,33 @@ namespace ExpandPuzzle
         [Tooltip("Phones default to 30 fps. 60 makes the jelly feel smooth.")]
         public int targetFrameRate = 60;
 
+        [Header("Feel")]
+        [Tooltip("Sounds. Found on this object when left empty.")]
+        public GameAudio sound;
+        [Tooltip("When only one target is still open, it pulses.")]
+        public bool hintLastTarget = true;
+
         const string ProgressKey = "ExpandPuzzle.Level";
+        const string StarsKey = "ExpandPuzzle.Stars.";
+
+        /// <summary>Best star rating reached on a level so far (0 = never solved).</summary>
+        public static int BestStars(int index)
+        {
+            return PlayerPrefs.GetInt(StarsKey + index, 0);
+        }
+
+        static void SaveBestStars(int index, int stars)
+        {
+            if (stars <= BestStars(index)) return;
+            PlayerPrefs.SetInt(StarsKey + index, stars);
+            PlayerPrefs.Save();
+        }
+
+        /// <summary>With <see cref="lockLevels"/> on, a level opens once the one before it is solved.</summary>
+        public bool IsUnlocked(int index)
+        {
+            return !lockLevels || index <= 0 || BestStars(index - 1) > 0;
+        }
 
         struct Snapshot
         {
@@ -50,6 +78,7 @@ namespace ExpandPuzzle
 
         readonly Dictionary<Vector2Int, CellStatus> m_Status = new Dictionary<Vector2Int, CellStatus>();
         readonly List<BadgeInfo> m_Badges = new List<BadgeInfo>();
+        readonly HashSet<Vector2Int> m_Covered = new HashSet<Vector2Int>();
 
         BoardView m_Board;
         BlobView m_Blob;
@@ -70,6 +99,8 @@ namespace ExpandPuzzle
             if (cameraFramer == null) cameraFramer = GetComponent<CameraFramer>();
             if (cameraFramer == null) cameraFramer = gameObject.AddComponent<CameraFramer>();
             if (fx == null) fx = GetComponent<GameFx>();
+            if (sound == null) sound = GetComponent<GameAudio>();
+            if (sound == null) sound = gameObject.AddComponent<GameAudio>();   // no clips: silent, but safe to call
             if (levelRoot == null) levelRoot = transform;
         }
 
@@ -80,7 +111,21 @@ namespace ExpandPuzzle
                 ui.UndoClicked += Undo;
                 ui.RestartClicked += Restart;
                 ui.LevelPicked += JumpToLevel;
+                ui.WinStarShown += OnWinStar;
             }
+            PressScale.Pressed += OnButtonPressed;
+        }
+
+        void OnButtonPressed()
+        {
+            sound.Play(sound.click);
+            Haptics.Light();
+        }
+
+        void OnWinStar(int index)
+        {
+            sound.Play(sound.winStar, 1f + 0.12f * index);
+            Haptics.Light();
         }
 
         void OnDisable()
@@ -90,16 +135,30 @@ namespace ExpandPuzzle
                 ui.UndoClicked -= Undo;
                 ui.RestartClicked -= Restart;
                 ui.LevelPicked -= JumpToLevel;
+                ui.WinStarShown -= OnWinStar;
             }
+            PressScale.Pressed -= OnButtonPressed;
         }
 
         void Start()
         {
             int index = startLevel;
             if (rememberProgress) index = PlayerPrefs.GetInt(ProgressKey, startLevel);
+#if UNITY_EDITOR
+            // The level editor leaves a level here when its "Test" button starts Play mode.
+            string test = PlayerPrefs.GetString(Levels.TestLevelKey, "");
+            if (test.Length > 0)
+            {
+                PlayerPrefs.DeleteKey(Levels.TestLevelKey);
+                var parsed = LevelText.Parse(test);
+                if (parsed.Count > 0) index = Levels.SetTemporary(parsed[0]);
+            }
+#endif
             if (ui != null)
             {
-                ui.BuildPicker(Levels.Count, i => Levels.Load(i).UsesColor);
+                ui.BuildPicker(Levels.Count, i => Levels.Load(i).UsesColor, BestStars, IsUnlocked);
+                ui.AddPickerToggle("Sound", () => GameAudio.Enabled, () => GameAudio.Enabled = !GameAudio.Enabled);
+                ui.AddPickerToggle("Vibration", () => Haptics.Enabled, () => { Haptics.Enabled = !Haptics.Enabled; Haptics.Medium(); });
                 if (fx != null)
                     ui.AddPickerToggle("Star particles on win", () => fx.starParticlesOnWin, () => fx.starParticlesOnWin = !fx.starParticlesOnWin);
             }
@@ -124,6 +183,12 @@ namespace ExpandPuzzle
         }
 
         // ---------------------------------------------------------------- levels
+
+        /// <summary>Level editor: play a level that is not in the saved list (replaces the previous test level).</summary>
+        public void PlayTestLevel(LevelDef def)
+        {
+            LoadLevel(Levels.SetTemporary(def), true);
+        }
 
         /// <summary>Debug: go straight to a level (0-based).</summary>
         public void JumpToLevel(int index)
@@ -191,10 +256,16 @@ namespace ExpandPuzzle
             }
             UpdateMovesUi();
 
+            m_PumpStreak = 0;
+            m_LastStars = 3;
             RefreshFeedback(false);
             m_Blob.DropIn();
             m_Board.Ripple(m_Head, 0.06f, 16f);
+            sound.Play(sound.levelStart);
         }
+
+        int m_PumpStreak;    // pump presses in a row: each one sounds a little higher
+        int m_LastStars = 3;
 
         /// <summary>Keeps the level as authored or turns it a quarter, whichever shows the board bigger.</summary>
         LevelData BestOrientation(LevelData level)
@@ -215,6 +286,7 @@ namespace ExpandPuzzle
         public void Restart()
         {
             LoadLevel(m_LevelIndex, false);
+            sound.Play(sound.restart);
         }
 
         // ---------------------------------------------------------------- rules
@@ -233,6 +305,8 @@ namespace ExpandPuzzle
                 foreach (var c in moved) m_Cells[c.Key] = c.Value;
                 m_Head += dir;
                 m_Blob.MoveTo(m_Head, dir);
+                m_PumpStreak = 0;
+                sound.Play(sound.move);
                 AfterChange();
                 return true;
             }
@@ -254,7 +328,12 @@ namespace ExpandPuzzle
                 {
                     PushUndo();
                     foreach (var c in added) m_Cells[c.Key] = c.Value;
-                    m_Blob.Grow(m_Cells, m_Head, pump.dir);
+                    m_Blob.Grow(m_Cells, m_Head, pump.dir, pump.color);
+                    m_PumpStreak++;
+                    float rise = 1f + sound.pumpPitchStep * Mathf.Min(m_PumpStreak - 1, 10);
+                    sound.Play(sound.pump, rise);
+                    sound.Play(sound.grow, rise);
+                    Haptics.Medium();
                     if (fx != null)
                     {
                         int shown = Mathf.Min(added.Count, 8);
@@ -270,6 +349,8 @@ namespace ExpandPuzzle
             if (!isRepeat)
             {
                 m_Blob.Bump(dir);
+                sound.Play(sound.bump);
+                Haptics.Light();
                 if (fx != null)
                 {
                     // Puff where the blob meets the wall.
@@ -291,9 +372,19 @@ namespace ExpandPuzzle
             UpdateMovesUi();
             RefreshFeedback(true);
 
+            // A move that costs a star is felt and heard (the HUD drops the star).
+            int stars = Rules.StarsFor(m_Level, m_Moves);
+            if (stars < m_LastStars)
+            {
+                sound.Play(sound.starLost);
+                Haptics.Fail();
+            }
+            m_LastStars = stars;
+
             if (Rules.IsSolved(m_Level, m_Cells))
             {
                 m_Solved = true;
+                if (!Levels.IsTemporary(m_LevelIndex)) SaveBestStars(m_LevelIndex, Rules.StarsFor(m_Level, m_Moves));
                 StartCoroutine(WinRoutine());
             }
         }
@@ -305,10 +396,13 @@ namespace ExpandPuzzle
                 m_Board.Pumps[i].SetArmed(m_Cells.ContainsKey(m_Level.pumps[i].Nozzle));
 
             m_Badges.Clear();
+            m_Covered.Clear();
+            int newOk = 0, newForbidden = 0, newWrong = 0;
             foreach (var c in m_Cells)
             {
                 CellStatus status = Rules.StatusOf(m_Level, c.Key, c.Value);
                 if (status == CellStatus.Plain) continue;
+                if (status == CellStatus.TargetOk) m_Covered.Add(c.Key);
 
                 int need = LevelData.AnyColor;
                 m_Level.targets.TryGetValue(c.Key, out need);
@@ -320,18 +414,50 @@ namespace ExpandPuzzle
                     cellColor = c.Value
                 });
 
-                if (withEffects && fx != null)
+                if (withEffects)
                 {
                     CellStatus before;
                     bool had = m_Status.TryGetValue(c.Key, out before);
                     if (!had || before != status)
                     {
-                        Vector3 top = m_Board.CellToWorld(c.Key, m_Blob.height + 0.05f);
-                        if (status == CellStatus.TargetOk) fx.Play(fx.targetHit, top);
-                        else if (status == CellStatus.Forbidden) fx.Play(fx.forbiddenHit, top);
+                        if (status == CellStatus.TargetOk) newOk++;
+                        else if (status == CellStatus.Forbidden) newForbidden++;
+                        else if (status == CellStatus.TargetWrongColor) newWrong++;
+
+                        if (fx != null)
+                        {
+                            Vector3 top = m_Board.CellToWorld(c.Key, m_Blob.height + 0.05f);
+                            if (status == CellStatus.TargetOk) fx.Play(fx.targetHit, top);
+                            else if (status == CellStatus.Forbidden) fx.Play(fx.forbiddenHit, top);
+                        }
                     }
                 }
             }
+
+            // One sound per step, the most important one: trouble first, then progress.
+            if (newForbidden > 0)
+            {
+                sound.Play(sound.forbidden);
+                Haptics.Medium();
+            }
+            else if (newWrong > 0) sound.Play(sound.wrongColor);
+            else if (newOk > 0)
+            {
+                sound.Play(sound.targetCovered, 1f + sound.targetPitchStep * Mathf.Min(m_Covered.Count - 1, 12));
+                Haptics.Light();
+            }
+
+            // The board shows which targets are done; the blob learns where the nearest open one is.
+            m_Board.SetCovered(m_Covered, hintLastTarget && !m_Solved);
+            Vector2 interest = Vector2.zero;
+            float nearest = float.MaxValue;
+            foreach (var t in m_Level.targets)
+            {
+                if (m_Covered.Contains(t.Key)) continue;
+                Vector2 d = t.Key - m_Head;
+                if (d.sqrMagnitude < nearest) { nearest = d.sqrMagnitude; interest = d; }
+            }
+            if (m_Blob != null) m_Blob.interest = interest;
 
             m_Status.Clear();
             for (int i = 0; i < m_Badges.Count; i++) m_Status[m_Badges[i].cell] = m_Badges[i].status;
@@ -352,6 +478,9 @@ namespace ExpandPuzzle
             // 1. The click: everything settles into place.
             yield return new WaitForSeconds(0.16f);
             m_Blob.Settle();
+            sound.Play(sound.winSettle);
+            Haptics.Heavy();
+            m_Board.SetCovered(m_Covered, false);
             if (cameraFramer != null) cameraFramer.Punch(0.45f);
             m_Board.Ripple(m_Head, 0.17f, 9f);
 
@@ -370,6 +499,8 @@ namespace ExpandPuzzle
 
             // 3. The party.
             m_Blob.Celebrate();
+            sound.Play(sound.winJingle);
+            Haptics.Success();
             if (cameraFramer != null) cameraFramer.Punch(1f);
             if (fx != null)
             {
@@ -381,10 +512,10 @@ namespace ExpandPuzzle
             // Let the party be seen for a moment before the result card covers the middle.
             yield return new WaitForSeconds(0.55f);
             if (ui != null) ui.ShowWin(m_LevelIndex + 1, Rules.StarsFor(m_Level, m_Moves), m_Moves);
-            yield return new WaitForSeconds(nextLevelDelay);
+            yield return new WaitForSeconds(nextLevelDelay + (ui != null ? ui.WinExtraTime : 0f));
 
-            // 4. Wipe to the next level (in its own colour).
-            int next = (m_LevelIndex + 1) % Levels.Count;
+            // 4. Wipe to the next level (in its own colour). A level under test simply starts again.
+            int next = Levels.IsTemporary(m_LevelIndex) ? m_LevelIndex : (m_LevelIndex + 1) % Levels.Count;
             Color wipe = theme.SurfaceColor(next);
             yield return Fade(wipe, 0f, 1f, 0.24f);
             BuildLevel(next, true);
@@ -428,8 +559,11 @@ namespace ExpandPuzzle
             m_Head = snap.head;
             m_Moves++;   // taking a move back is not free: it counts as a move
             m_Blob.Snap(m_Cells, m_Head);
+            m_PumpStreak = 0;
+            sound.Play(sound.undo);
             UpdateMovesUi();
             RefreshFeedback(false);
+            m_LastStars = Rules.StarsFor(m_Level, m_Moves);
         }
     }
 }

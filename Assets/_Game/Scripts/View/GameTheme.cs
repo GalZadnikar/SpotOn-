@@ -68,6 +68,27 @@ namespace ExpandPuzzle
             MaterialFactory.Hex(0xFF9F2E), // orange
         };
 
+        [Header("Blob shape (change while playing - the blob updates at once)")]
+        [Range(0.2f, 1.2f)] public float blobHeight = 0.62f;
+        [Tooltip("Gap between the blob and the edge of its cells.")]
+        [Range(0f, 0.2f)] public float blobMargin = 0.05f;
+        [Tooltip("How round the outer corners are.")]
+        [Range(0f, 0.45f)] public float blobCornerRadius = 0.24f;
+        [Tooltip("Size of the rounded top edge.")]
+        [Range(0f, 0.4f)] public float blobBevel = 0.14f;
+
+        [Header("Where two colours meet")]
+        [Tooltip("How two colours of the blob meet: an edge between two pieces, a soft blend, or a plain hard line.")]
+        public ColorSeam colorSeam = ColorSeam.Edge;
+        [Tooltip("Edge: gap between two colours (0 = the pieces touch).")]
+        [Range(0f, 0.1f)] public float seamGap = 0f;
+        [Tooltip("Edge: how round the little notch is where the edge reaches the outside of the blob.")]
+        [Range(0f, 0.24f)] public float seamCorner = 0.1f;
+        [Tooltip("Edge: how deep and wide the groove between two colours is. Small = a fine crease, so the blob still reads as one piece.")]
+        [Range(0f, 0.4f)] public float seamBevel = 0.14f;
+        [Tooltip("Soft blend: how far the colours run into each other, in cells on each side of the seam.")]
+        [Range(0f, 0.5f)] public float colorBlend = 0.2f;
+
         [Tooltip("Spare blocks lined up behind every pump (purely visual, 0 = none).")]
         [Range(0, 4)] public int pumpSupplyBlocks = 2;
 
@@ -86,6 +107,7 @@ namespace ExpandPuzzle
         Material[] m_PumpByColor;
         Material[] m_GrooveByColor;
         Material[] m_GrooveEdgeByColor;
+        Material m_BlobBlend;
         bool m_Prepared;
 
         public int ColorCount { get { return Mathf.Max(1, cellColors.Length); } }
@@ -148,6 +170,20 @@ namespace ExpandPuzzle
                 m_GrooveByColor[i] = Matte(blob, Color.HSVToRGB(h, Mathf.Clamp01(s * 1.1f), v * 0.6f));
                 m_GrooveEdgeByColor[i] = Matte(blob, Color.Lerp(c, Color.white, 0.5f));
             }
+
+            // One material for a blob whose colours come from a texture (soft seams between colours).
+            // Its shadow tint is the average of what the single-colour materials use.
+            m_BlobBlend = new Material(blob);
+            m_BlobBlend.name = "Blob (blended colours)";
+            MaterialFactory.Tint(m_BlobBlend, Color.white);
+            if (m_BlobBlend.HasProperty("_SColor"))
+            {
+                Color sum = Color.clear;
+                for (int i = 0; i < n; i++) sum += MaterialFactory.ShadeTint(cellColors.Length > i ? cellColors[i] : Color.white);
+                sum /= n;
+                sum.a = 1f;
+                m_BlobBlend.SetColor("_SColor", sum);
+            }
         }
 
         static Material Matte(Material source, Color color)
@@ -179,6 +215,9 @@ namespace ExpandPuzzle
 
         public Material[] BlobMaterials { get { return m_BlobByColor; } }
 
+        /// <summary>White blob material; the colours come from a texture set by the blob itself.</summary>
+        public Material BlobBlendMaterial { get { return m_BlobBlend; } }
+
         /// <summary>Dot on a target tile: yellow when any colour fits, otherwise the colour it needs.</summary>
         public Material MarkMaterial(int color)
         {
@@ -208,6 +247,9 @@ namespace ExpandPuzzle
             return cellColors[Mathf.Clamp(color, 0, cellColors.Length - 1)];
         }
     }
+
+    /// <summary>How two colours of the blob meet.</summary>
+    public enum ColorSeam { HardLine, SoftBlend, Edge }
 
     /// <summary>Creates the default materials (Toony Colors Pro 2 when available, URP Lit otherwise).</summary>
     public static class MaterialFactory
@@ -275,15 +317,17 @@ namespace ExpandPuzzle
             if (m == null) return;
             if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", color);
             if (m.HasProperty("_Color")) m.SetColor("_Color", color);
-            if (m.HasProperty("_SColor"))
-            {
-                // Toony Colors multiplies the albedo by the shadow colour, so express the shade as a tint.
-                Color shade = Shade(color);
-                m.SetColor("_SColor", new Color(
-                    Mathf.Clamp01(shade.r / Mathf.Max(color.r, 0.01f)),
-                    Mathf.Clamp01(shade.g / Mathf.Max(color.g, 0.01f)),
-                    Mathf.Clamp01(shade.b / Mathf.Max(color.b, 0.01f)), 1f));
-            }
+            if (m.HasProperty("_SColor")) m.SetColor("_SColor", ShadeTint(color));
+        }
+
+        /// <summary>Toony Colors multiplies the albedo by the shadow colour, so the shade is expressed as a tint.</summary>
+        public static Color ShadeTint(Color color)
+        {
+            Color shade = Shade(color);
+            return new Color(
+                Mathf.Clamp01(shade.r / Mathf.Max(color.r, 0.01f)),
+                Mathf.Clamp01(shade.g / Mathf.Max(color.g, 0.01f)),
+                Mathf.Clamp01(shade.b / Mathf.Max(color.b, 0.01f)), 1f);
         }
 
         /// <param name="color">Lit colour.</param>

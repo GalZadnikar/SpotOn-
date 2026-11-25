@@ -24,6 +24,10 @@ namespace ExpandPuzzle.EditorTools
         const string GameRootName = "ExpandPuzzle";
         const string UiRootName = "Game UI";
         const string CmName = "CM Camera";
+        const string WinCanvasName = "Win Canvas";
+        const string WinCameraName = "Win Card Camera";
+        const string DefaultStarEffect = "Assets/EpicVictoryEffects/Prefabs/Star_01/Star_01_Anim_01.prefab";
+        const int UiLayer = 5;
 
         [MenuItem("Tools/Expand Puzzle/Build Scene")]
         public static void Build()
@@ -31,6 +35,8 @@ namespace ExpandPuzzle.EditorTools
             DestroyRoot(GameRootName);
             DestroyRoot(UiRootName);
             DestroyRoot(CmName);
+            DestroyRoot(WinCanvasName);
+            DestroyRoot(WinCameraName);
 
             GameTheme theme = BuildTheme();
 
@@ -97,9 +103,11 @@ namespace ExpandPuzzle.EditorTools
 
             var fx = root.AddComponent<GameFx>();
             AssignEffects(fx);
+            AssignSounds(root.AddComponent<GameAudio>());
 
             manager.input = input;
             manager.fx = fx;
+            manager.sound = root.GetComponent<GameAudio>();
             manager.cameraFramer = framer;
             manager.levelRoot = levelRoot.transform;
             manager.theme = theme;
@@ -107,6 +115,7 @@ namespace ExpandPuzzle.EditorTools
             // ---- HUD
             GameUI ui = BuildUI(input);
             manager.ui = ui;
+            AddStarEffects();
 
             EnsureEventSystem();
 
@@ -178,6 +187,97 @@ namespace ExpandPuzzle.EditorTools
             fx.winConfetti.prefab = Fx("Environment/Confetti/Blast/ConfettiBlastRainbow");
             fx.winSparkleNoStars.prefab = Fx("Interactive/Sparkle/SparkleSolo/SparkleSoloWhite");
             fx.winBurstNoStars.prefab = Fx("Interactive/Level Up/Nova/LevelupNovaYellow");
+        }
+
+        const string SoundRoot = "Assets/Casual Game Sounds U6/CasualGameSounds/DM-CGS-";
+
+        /// <summary>
+        /// Fills the empty sound slots from the "Casual Game Sounds U6" pack. The clips were picked by
+        /// their length and pitch shape, not by ear - swap any of them on the Game Audio component.
+        /// </summary>
+        static void AssignSounds(GameAudio a)
+        {
+            if (a == null) return;
+            Clip(a.move, 3);            // short soft single note
+            Clip(a.bump, 22);           // low, dull
+            Clip(a.pump, 7);            // quick upward slide
+            Clip(a.grow, 21);           // tiny rising blip
+            Clip(a.targetCovered, 34);  // one bright ding
+            Clip(a.forbidden, 47);      // short falling phrase
+            Clip(a.wrongColor, 16);     // very short falling phrase
+            Clip(a.starLost, 30);       // falling, half a second
+            Clip(a.winSettle, 27);      // small chime
+            Clip(a.winJingle, 45);      // two seconds, climbing
+            Clip(a.winStar, 37);        // short bright note
+            Clip(a.levelStart, 14);     // quick low pop
+            Clip(a.undo, 31);
+            Clip(a.restart, 46);        // downward slide
+            Clip(a.click, 40);          // tiny tick
+            AssignMusic(a);
+            EditorUtility.SetDirty(a);
+        }
+
+        const string MusicRoot = "Assets/Free Ambient Instrumental Music/";
+        static readonly string[] MusicTracks =
+        {
+            "3Piano/Piano", "3Piano/Piano1", "3Piano/Piano2",
+            "Harp/Harp", "Harp/Harp1", "Harp/Harp2",
+        };
+
+        /// <summary>Fills an empty music list with calm piano and harp tracks, set to stream so they stay light.</summary>
+        static void AssignMusic(GameAudio a)
+        {
+            if (a.music != null && a.music.Length > 0) return;   // keep what was chosen by hand
+            var list = new System.Collections.Generic.List<AudioClip>();
+            foreach (string t in MusicTracks)
+            {
+                string path = MusicRoot + t + ".wav";
+                MakeStreaming(path);
+                var clip = AssetDatabase.LoadAssetAtPath<AudioClip>(path);
+                if (clip != null) list.Add(clip);
+                else Debug.LogWarning("[ExpandPuzzle] Music not found: " + path);
+            }
+            a.music = list.ToArray();
+        }
+
+        static void MakeStreaming(string path)
+        {
+            var imp = AssetImporter.GetAtPath(path) as AudioImporter;
+            if (imp == null) return;
+            var set = imp.defaultSampleSettings;
+            if (set.loadType == AudioClipLoadType.Streaming && set.compressionFormat == AudioCompressionFormat.Vorbis) return;
+            set.loadType = AudioClipLoadType.Streaming;
+            set.compressionFormat = AudioCompressionFormat.Vorbis;
+            set.quality = 0.5f;
+            imp.defaultSampleSettings = set;
+            imp.loadInBackground = true;
+            imp.SaveAndReimport();
+        }
+
+        static void Clip(GameAudio.Sound slot, int number)
+        {
+            if (slot == null || slot.clip != null) return;   // keep what was chosen by hand
+            string path = SoundRoot + number.ToString("00") + ".wav";
+            slot.clip = AssetDatabase.LoadAssetAtPath<AudioClip>(path);
+            if (slot.clip == null) Debug.LogWarning("[ExpandPuzzle] Sound not found: " + path);
+        }
+
+        /// <summary>Adds the Game Audio component to the game in the open scene and fills its empty slots.</summary>
+        [MenuItem("Tools/Expand Puzzle/Add Sounds")]
+        public static void AddSounds()
+        {
+            var manager = Object.FindFirstObjectByType<GameManager>();
+            if (manager == null)
+            {
+                Debug.LogWarning("[ExpandPuzzle] Sounds: no game in this scene.");
+                return;
+            }
+            GameAudio a = manager.GetComponent<GameAudio>();
+            if (a == null) a = manager.gameObject.AddComponent<GameAudio>();
+            AssignSounds(a);
+            manager.sound = a;
+            EditorUtility.SetDirty(manager);
+            EditorSceneManager.MarkSceneDirty(manager.gameObject.scene);
         }
 
         static GameObject Fx(string path)
@@ -322,8 +422,9 @@ namespace ExpandPuzzle.EditorTools
             ui.movesLabel = Label(hud, "Moves Label", "0 / 7", 30, FontStyle.Bold, new Vector2(0.5f, 1f), new Vector2(0f, -176f), new Vector2(420f, 40f));
             ui.movesLabel.color = new Color(Ink.r, Ink.g, Ink.b, 0.65f);
 
-            ui.undoButton = RoundButton(hud, "Undo Button", circle, UiSpriteGen.IconUndo(), new Vector2(0f, 1f), new Vector2(48f, -48f));
-            ui.restartButton = RoundButton(hud, "Restart Button", circle, UiSpriteGen.IconRestart(), new Vector2(1f, 1f), new Vector2(-48f, -48f));
+            // Undo / restart sit a little below the top edge so a thumb reaches them.
+            ui.undoButton = RoundButton(hud, "Undo Button", circle, UiSpriteGen.IconUndo(), new Vector2(0f, 1f), new Vector2(48f, -190f));
+            ui.restartButton = RoundButton(hud, "Restart Button", circle, UiSpriteGen.IconRestart(), new Vector2(1f, 1f), new Vector2(-48f, -190f));
 
             // ---- win card
             var card = Panel(hud, "Win Card", rounded, new Vector2(0.5f, 0.5f), new Vector2(640f, 340f), new Color(1f, 1f, 1f, 0.97f));
@@ -339,7 +440,7 @@ namespace ExpandPuzzle.EditorTools
             ui.winMovesLabel.color = new Color(0.35f, 0.4f, 0.45f, 0.8f);
             card.gameObject.SetActive(false);
 
-            // ---- level picker (debug)
+            // ---- level overview (buttons, stars and page tabs are created at runtime by GameUI.BuildPicker)
             var overlay = new GameObject("Level Picker", typeof(RectTransform));
             overlay.transform.SetParent(root, false);
             Stretch(overlay.GetComponent<RectTransform>());
@@ -362,7 +463,7 @@ namespace ExpandPuzzle.EditorTools
             var fitter = pickerPanel.gameObject.AddComponent<ContentSizeFitter>();
             fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-            Text pickerTitle = Label(pickerPanel, "Title", "LEVELS  (debug - green = colour pumps)", 34, FontStyle.Bold, new Vector2(0.5f, 1f), Vector2.zero, new Vector2(800f, 50f));
+            Text pickerTitle = Label(pickerPanel, "Title", "SELECT LEVEL", 34, FontStyle.Bold, new Vector2(0.5f, 1f), Vector2.zero, new Vector2(800f, 50f));
             pickerTitle.color = new Color(0.3f, 0.36f, 0.4f, 1f);
             pickerTitle.gameObject.AddComponent<LayoutElement>().preferredHeight = 50f;
 
@@ -388,6 +489,94 @@ namespace ExpandPuzzle.EditorTools
             ui.fader = fimg;
 
             return ui;
+        }
+
+        /// <summary>
+        /// Particles cannot be drawn on top of an overlay canvas, so the win card moves to its own canvas
+        /// that is drawn by a small extra camera (stacked on the main one, no post-processing). The
+        /// three-star effect from Epic Victory Effects is then created on the card. Safe to run again.
+        /// </summary>
+        [MenuItem("Tools/Expand Puzzle/Add Star Effects To Win Card")]
+        public static void AddStarEffects()
+        {
+            var ui = Object.FindFirstObjectByType<GameUI>();
+            Camera main = Camera.main;
+            if (ui == null || ui.winBanner == null || main == null)
+            {
+                Debug.LogWarning("[ExpandPuzzle] Star effects: no game UI / win card / main camera in this scene.");
+                return;
+            }
+
+            // ---- camera that only draws the win card and its particles
+            GameObject camGo = GameObject.Find(WinCameraName);
+            if (camGo == null) camGo = new GameObject(WinCameraName);
+            camGo.transform.SetPositionAndRotation(new Vector3(0f, -500f, 0f), Quaternion.identity);
+            Camera cam = camGo.GetComponent<Camera>();
+            if (cam == null) cam = camGo.AddComponent<Camera>();
+            cam.orthographic = true;
+            cam.orthographicSize = 5f;
+            cam.nearClipPlane = 0.1f;
+            cam.farClipPlane = 50f;
+            cam.cullingMask = 1 << UiLayer;
+            cam.clearFlags = CameraClearFlags.Depth;
+            var camData = cam.GetUniversalAdditionalCameraData();
+            camData.renderType = CameraRenderType.Overlay;
+            camData.renderPostProcessing = false;
+
+            var mainData = main.GetUniversalAdditionalCameraData();
+            if (!mainData.cameraStack.Contains(cam)) mainData.cameraStack.Add(cam);
+            main.cullingMask &= ~(1 << UiLayer);
+
+            // ---- canvas for the card
+            GameObject canvasGo = GameObject.Find(WinCanvasName);
+            if (canvasGo == null) canvasGo = new GameObject(WinCanvasName, typeof(RectTransform));
+            Canvas canvas = canvasGo.GetComponent<Canvas>();
+            if (canvas == null) canvas = canvasGo.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceCamera;
+            canvas.worldCamera = cam;
+            canvas.planeDistance = 10f;
+            canvas.sortingOrder = 0;
+            CanvasScaler scaler = canvasGo.GetComponent<CanvasScaler>();
+            if (scaler == null) scaler = canvasGo.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1080f, 1920f);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = 0.5f;
+
+            RectTransform card = ui.winBanner;
+            bool wasActive = card.gameObject.activeSelf;
+            card.SetParent(canvasGo.transform, false);
+            card.anchorMin = card.anchorMax = new Vector2(0.5f, 0.5f);
+            card.anchoredPosition = Vector2.zero;
+            card.localScale = Vector3.one;
+            card.gameObject.SetActive(wasActive);
+
+            // ---- where the effect goes
+            Transform anchor = card.Find("Star Effects");
+            if (anchor == null)
+            {
+                var anchorGo = new GameObject("Star Effects", typeof(RectTransform));
+                anchorGo.transform.SetParent(card, false);
+                anchor = anchorGo.transform;
+            }
+            var anchorRt = (RectTransform)anchor;
+            anchorRt.anchorMin = anchorRt.anchorMax = new Vector2(0.5f, 0.5f);
+            anchorRt.anchoredPosition = new Vector2(0f, 12f);
+            anchorRt.sizeDelta = Vector2.zero;
+            ui.starEffectAnchor = anchorRt;
+
+            if (ui.starEffectPrefab == null)
+            {
+                ui.starEffectPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(DefaultStarEffect);
+                if (ui.starEffectPrefab == null)
+                    Debug.LogWarning("[ExpandPuzzle] Star effect not found: " + DefaultStarEffect + " - the win card keeps its plain stars.");
+            }
+
+            foreach (var t in canvasGo.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = UiLayer;
+
+            EditorUtility.SetDirty(ui);
+            EditorUtility.SetDirty(main);
+            EditorSceneManager.MarkSceneDirty(canvasGo.scene);
         }
 
         static void Stretch(RectTransform rt)

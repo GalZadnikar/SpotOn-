@@ -14,11 +14,19 @@ namespace ExpandPuzzle
         public const float PitDepth = 0.2f;
         const float SurfaceExtent = 90f;
 
-        struct Tile
+        class Tile
         {
             public Transform transform;
             public Vector2Int cell;
+            public bool isTarget;
+            public Transform dot;        // the coloured mark of a target
+            public float lift, bulge;    // set by the ripple
+            public float sink;           // 0..1, a covered target rests a little lower
+            public bool covered;
         }
+
+        Tile m_LastTarget;       // the only target still open: it pulses as a gentle hint
+        float m_HintBlend;
 
         readonly List<PumpView> m_Pumps = new List<PumpView>();
         readonly List<Mesh> m_Meshes = new List<Mesh>();
@@ -147,10 +155,11 @@ namespace ExpandPuzzle
 
                     int need;
                     Transform tile;
+                    Transform dot = null;
                     if (level.targets.TryGetValue(c, out need))
                     {
                         tile = Part("Target", tiles, tileMesh, theme.target);
-                        Part("Dot", tile, dotMesh, theme.MarkMaterial(need));
+                        dot = Part("Dot", tile, dotMesh, theme.MarkMaterial(need));
                     }
                     else if (level.forbidden.Contains(c))
                     {
@@ -163,7 +172,7 @@ namespace ExpandPuzzle
                     }
 
                     tile.localPosition = CellToLocal(c);
-                    m_Tiles.Add(new Tile { transform = tile, cell = c });
+                    m_Tiles.Add(new Tile { transform = tile, cell = c, isTarget = dot != null, dot = dot });
                 }
             }
 
@@ -308,25 +317,69 @@ namespace ExpandPuzzle
                 for (int i = 0; i < m_Tiles.Count; i++)
                 {
                     Tile tile = m_Tiles[i];
-                    if (tile.transform == null) continue;
                     float local = (t - Vector2.Distance(tile.cell, origin) / speed) / bump;
                     float k = local > 0f && local < 1f ? Mathf.Sin(local * Mathf.PI) : 0f;
-                    Vector3 p = CellToLocal(tile.cell);
-                    p.y = k * strength;
-                    tile.transform.localPosition = p;
-                    float s = 1f + k * 0.08f;
-                    tile.transform.localScale = new Vector3(s, 1f + k * 0.6f, s);
+                    tile.lift = k * strength;
+                    tile.bulge = k;
                 }
                 yield return null;
             }
 
             for (int i = 0; i < m_Tiles.Count; i++)
             {
-                if (m_Tiles[i].transform == null) continue;
-                m_Tiles[i].transform.localPosition = CellToLocal(m_Tiles[i].cell);
-                m_Tiles[i].transform.localScale = Vector3.one;
+                m_Tiles[i].lift = 0f;
+                m_Tiles[i].bulge = 0f;
             }
             m_Ripple = null;
+        }
+
+        /// <summary>
+        /// Tells the board which targets are covered with the right colour. Covered targets rest a little
+        /// lower; when exactly one is still open (and <paramref name="hint"/> is on) it pulses.
+        /// </summary>
+        public void SetCovered(ICollection<Vector2Int> covered, bool hint)
+        {
+            Tile open = null;
+            int openCount = 0;
+            for (int i = 0; i < m_Tiles.Count; i++)
+            {
+                Tile tile = m_Tiles[i];
+                if (!tile.isTarget) continue;
+                tile.covered = covered != null && covered.Contains(tile.cell);
+                if (!tile.covered) { open = tile; openCount++; }
+            }
+            m_LastTarget = hint && openCount == 1 ? open : null;
+        }
+
+        void LateUpdate()
+        {
+            float dt = Time.deltaTime;
+            m_HintBlend = Mathf.MoveTowards(m_HintBlend, m_LastTarget != null ? 1f : 0f, dt * 3f);
+            float beat = 0.5f + 0.5f * Mathf.Sin(Time.time * 5.2f);
+
+            for (int i = 0; i < m_Tiles.Count; i++)
+            {
+                Tile tile = m_Tiles[i];
+                if (tile.transform == null) continue;
+
+                float hint = 0f;
+                if (tile.isTarget)
+                {
+                    tile.sink = Mathf.MoveTowards(tile.sink, tile.covered ? 1f : 0f, dt * 7f);
+                    if (tile == m_LastTarget) hint = m_HintBlend * beat;
+                    if (tile.dot != null)
+                    {
+                        float d = 1f + hint * 0.22f;
+                        tile.dot.localScale = new Vector3(d, 1f + hint * 0.8f, d);
+                    }
+                }
+
+                Vector3 p = CellToLocal(tile.cell);
+                p.y = tile.lift - tile.sink * 0.022f + hint * 0.03f;
+                tile.transform.localPosition = p;
+                float s = 1f + tile.bulge * 0.08f + hint * 0.035f;
+                tile.transform.localScale = new Vector3(s, 1f + tile.bulge * 0.6f, s);
+            }
         }
 
         void OnDestroy()

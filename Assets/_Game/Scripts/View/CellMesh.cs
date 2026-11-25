@@ -32,6 +32,14 @@ namespace ExpandPuzzle
             public bool solidOutside;
             public Vector2Int boundsMin;
             public Vector2Int boundsMax;
+            [Tooltip("Cells in different groups (the submesh numbers) do not fuse: an edge runs between them.")]
+            public bool splitGroups;
+            [Tooltip("Gap between a piece and the edge of its cell on a side that faces another group.")]
+            public float seamMargin;
+            [Tooltip("Corner radius where such an edge meets the outside of the solid.")]
+            public float seamRadius;
+            [Tooltip("Size of the rounded top edge along such an edge (0 = the pieces meet flat).")]
+            public float seamBevel;
 
             public static Settings Create(float margin, float cornerRadius, float baseY, float topY, float bevel, bool merge)
             {
@@ -61,6 +69,7 @@ namespace ExpandPuzzle
             public Vector2 normal;   // outward normal, zero when the point is inside the solid
             public bool concave;     // concave fillet point: radius grows as the bevel moves in
             public bool wallAfter;   // true when the segment to the next point is an exposed wall
+            public float seam;       // 0 = normal bevel, 1 = the bevel of an edge between two groups
         }
 
         static readonly List<Vector3> s_Verts = new List<Vector3>();
@@ -71,6 +80,8 @@ namespace ExpandPuzzle
         static readonly List<LoopPoint> s_Loop = new List<LoopPoint>();
         static readonly HashSet<Vector2Int> s_Set = new HashSet<Vector2Int>();
         static Settings s_Settings;
+        static Dictionary<Vector2Int, int> s_Group;   // set while building a solid that is split into groups
+        static float s_SeamBevel;
 
         public static Mesh Build(ICollection<Vector2Int> cells, Settings s, Mesh reuse = null)
         {
@@ -85,6 +96,7 @@ namespace ExpandPuzzle
             set.Clear();
             foreach (var c in cells) set.Add(c);
             s_Settings = s;
+            s_Group = s.splitGroups ? submeshOf : null;
 
             submeshCount = Mathf.Max(1, submeshCount);
             while (s_SubTris.Count < submeshCount) s_SubTris.Add(new List<int>());
@@ -99,6 +111,7 @@ namespace ExpandPuzzle
             float height = s.topY - s.baseY;
             float bevel = Mathf.Clamp(s.bevel, 0f, height);
             float radius = Mathf.Clamp(s.cornerRadius, 0f, 0.5f - s.margin);
+            s_SeamBevel = s.splitGroups ? Mathf.Clamp(s.seamBevel, 0f, bevel) : bevel;
 
             foreach (var cell in set)
             {
@@ -135,32 +148,60 @@ namespace ExpandPuzzle
                 Vector2 nA = new Vector2(dA.x, dA.y);
                 Vector2 nB = new Vector2(dB.x, dB.y);
 
-                bool openA = !merge || !Solid(set, cell + dA);
-                bool openB = !merge || !Solid(set, cell + dB);
-                bool openDiag = !merge || !Solid(set, cell + dA + dB);
+                bool openA = !merge || !Fused(set, cell, cell + dA);
+                bool openB = !merge || !Fused(set, cell, cell + dB);
+                bool openDiag = !merge || !Fused(set, cell, cell + dA + dB);
+
+                // A side that faces a piece of another group is a seam: the wall sits (almost) on the cell edge.
+                bool seamA = Seam(set, cell, cell + dA);
+                bool seamB = Seam(set, cell, cell + dB);
+                bool seamDiag = Seam(set, cell, cell + dA + dB);
+                float mA = seamA ? s_Settings.seamMargin : margin;
+                float mB = seamB ? s_Settings.seamMargin : margin;
+                float sA = seamA ? 1f : 0f, sB = seamB ? 1f : 0f, sD = seamDiag ? 1f : 0f;
 
                 Vector2 corner = center + (nA + nB) * 0.5f;
 
                 if (openA && openB)
                 {
                     // Convex corner: quarter circle from side A's normal to side B's normal.
-                    Vector2 arcCenter = corner - (nA + nB) * (margin + radius);
+                    // Where a seam reaches the outside it gets a small notch; where pieces meet all round it stays tight.
+                    float r = radius;
+                    if (seamA || seamB)
+                        r = (seamA && seamB && set.Contains(cell + dA + dB)) ? 0f : Mathf.Min(radius, s_Settings.seamRadius);
+                    Vector2 arcCenter = corner - nA * (mA + r) - nB * (mB + r);
+                    if (r <= 0.0001f && seamA && seamB)
+                    {
+                        // Tight corner between pieces: one mitred point, so the bevels of both sides meet cleanly.
+                        s_Loop.Add(new LoopPoint { pos = arcCenter, normal = nA + nB, wallAfter = true, seam = 1f });
+                    }
+                    else if (r <= 0.0001f)
+                    {
+                        // Sharp corner where an edge reaches the outside: each side keeps its own bevel.
+                        s_Loop.Add(new LoopPoint { pos = arcCenter, normal = nA, wallAfter = true, seam = sA });
+                        s_Loop.Add(new LoopPoint { pos = arcCenter, normal = nB, wallAfter = true, seam = sB });
+                    }
+                    else
                     for (int i = 0; i <= seg; i++)
                     {
                         float t = (float)i / seg * Mathf.PI * 0.5f;
                         Vector2 n = nA * Mathf.Cos(t) + nB * Mathf.Sin(t);
-                        s_Loop.Add(new LoopPoint { pos = arcCenter + n * radius, normal = n, wallAfter = true });
+                        s_Loop.Add(new LoopPoint { pos = arcCenter + n * r, normal = n, wallAfter = true, seam = Mathf.Lerp(sA, sB, (float)i / seg) });
                     }
                 }
                 else if (openA && !openB)
                 {
-                    // Wall A runs straight on into the neighbour on side B.
-                    s_Loop.Add(new LoopPoint { pos = corner - nA * margin, normal = nA, wallAfter = false });
+                    // Wall A runs straight on into the neighbour on side B. If the neighbour's wall sits at
+                    // another depth (one of the two is a seam, the other the outside), a small step joins them.
+                    float mNext = seamDiag ? s_Settings.seamMargin : margin;
+                    bool step = openDiag && (Mathf.Abs(mNext - mA) > 0.00001f || sD != sA);
+                    s_Loop.Add(new LoopPoint { pos = corner - nA * mA, normal = nA, wallAfter = step, seam = sA });
+                    if (step) s_Loop.Add(new LoopPoint { pos = corner - nA * mNext, normal = nA, wallAfter = false, seam = sD });
                 }
                 else if (!openA && openB)
                 {
                     // Wall B starts here, coming out of the neighbour on side A.
-                    s_Loop.Add(new LoopPoint { pos = corner - nB * margin, normal = nB, wallAfter = true });
+                    s_Loop.Add(new LoopPoint { pos = corner - nB * mB, normal = nB, wallAfter = true, seam = sB });
                 }
                 else if (openDiag)
                 {
@@ -172,9 +213,10 @@ namespace ExpandPuzzle
                         Vector2 dir = -(nB * Mathf.Cos(t) + nA * Mathf.Sin(t));
                         s_Loop.Add(new LoopPoint
                         {
-                            pos = corner + dir * margin,
+                            pos = corner + dir * (seamDiag ? s_Settings.seamMargin : margin),
                             normal = -dir,
                             concave = true,
+                            seam = sD,
                             wallAfter = i < seg
                         });
                     }
@@ -185,6 +227,22 @@ namespace ExpandPuzzle
                     s_Loop.Add(new LoopPoint { pos = corner, normal = Vector2.zero, wallAfter = false });
                 }
             }
+        }
+
+        /// <summary>True when the neighbour is solid and belongs to the same piece as the cell.</summary>
+        static bool Fused(HashSet<Vector2Int> set, Vector2Int cell, Vector2Int other)
+        {
+            return Solid(set, other) && !Seam(set, cell, other);
+        }
+
+        /// <summary>True when the neighbour is a cell of another group, so an edge runs between the two.</summary>
+        static bool Seam(HashSet<Vector2Int> set, Vector2Int cell, Vector2Int other)
+        {
+            if (s_Group == null || !set.Contains(other)) return false;
+            int a, b;
+            s_Group.TryGetValue(cell, out a);
+            s_Group.TryGetValue(other, out b);
+            return a != b;
         }
 
         static bool Solid(HashSet<Vector2Int> set, Vector2Int c)
@@ -200,13 +258,16 @@ namespace ExpandPuzzle
             int count = s_Loop.Count;
             int rings = 2 + bevelSeg;           // bottom, wall top, then the bevel steps
             int start = s_Verts.Count;
-            float wallTop = topY - bevel;
+            float fullBevel = bevel;
 
             for (int i = 0; i < count; i++)
             {
                 LoopPoint p = s_Loop[i];
+                // Along an edge between two groups the bevel can be smaller than on the outside.
+                bevel = Mathf.Lerp(fullBevel, s_SeamBevel, p.seam);
+                float wallTop = topY - bevel;
                 bool inside = p.normal.sqrMagnitude < 0.0001f;
-                Vector3 flat = new Vector3(p.normal.x, 0f, p.normal.y);
+                Vector3 flat = new Vector3(p.normal.x, 0f, p.normal.y).normalized;   // mitred points carry a longer normal
 
                 AddVertex(new Vector3(p.pos.x, baseY, p.pos.y), inside ? Vector3.up : flat);
                 AddVertex(new Vector3(p.pos.x, wallTop, p.pos.y), inside ? Vector3.up : flat);

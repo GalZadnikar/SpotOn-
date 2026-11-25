@@ -151,6 +151,8 @@ namespace ExpandPuzzle
             {
                 float squash = push * 0.14f + wobble * 0.08f;
                 m_Body.localScale = new Vector3(1f + squash * 0.6f, 1f - squash, 1f + squash * 0.6f);
+                // Recoil: the stroke kicks the pump back from the nozzle, then it settles with a wobble.
+                m_Body.localPosition = new Vector3(0f, 0f, -0.09f * push - 0.03f * wobble);
             }
 
             UpdateSupply(dt);

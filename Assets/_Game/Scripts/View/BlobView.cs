@@ -15,17 +15,19 @@ namespace ExpandPuzzle
     }
 
     /// <summary>
-    /// The player: a jelly blob made of grid cells, with a face on its head cell.
+    /// The player: a jelly blob made of grid cells, with a face on its head cell
+    /// and one more face for every other colour it carries.
     /// Game logic is instant; this class only makes it look alive (glide, squash, wobble, blink)
     /// and shows what each cell is standing on (check, wrong colour, forbidden).
     /// </summary>
     public class BlobView : MonoBehaviour
     {
-        [Header("Shape")]
-        public float height = 0.62f;
-        public float margin = 0.05f;
-        public float cornerRadius = 0.24f;
-        public float bevel = 0.14f;
+        // Shape values come from the theme (GameManager > Theme > Blob shape), where they are saved
+        // and can be changed while playing. They are copied here before every rebuild.
+        [System.NonSerialized] public float height = 0.62f;
+        [System.NonSerialized] public float margin = 0.05f;
+        [System.NonSerialized] public float cornerRadius = 0.24f;
+        [System.NonSerialized] public float bevel = 0.14f;
 
         [Header("Feel")]
         public float glideSpeed = 24f;
@@ -47,13 +49,30 @@ namespace ExpandPuzzle
             public int cellColor;
             public float age;
             public bool used;
+            /// <summary>Sits on a cell that has a face, so it is drawn smaller and shares the cell with the eyes.</summary>
+            public bool onFace;
+        }
+
+        /// <summary>A pair of eyes. Index 0 is the head; the others belong to the other colours of the blob.</summary>
+        class Face
+        {
+            public Transform root;
+            public Transform eyeL, eyeR;
+            public Vector2Int rel;
+            public int color;
+            public bool hasBadge;
+            public float z = 0.02f;
+            public float blinkTimer = 2f;
+            public float blinkTime;
+            public Vector3 glance;        // idle: where this face is looking right now
+            public Vector3 glanceTarget;
         }
 
         GameTheme m_Theme;
         Transform m_Pivot;
         Transform m_MeshRoot;
-        Transform m_Face;
-        Transform m_EyeL, m_EyeR;
+        Transform m_FaceRoot;
+        readonly List<Face> m_Faces = new List<Face>();
         Transform m_BadgeRoot;
         MeshFilter m_Filter;
         MeshRenderer m_Renderer;
@@ -73,13 +92,9 @@ namespace ExpandPuzzle
 
         Vector3 m_Look, m_LookTarget;
         float m_LookTimer;
-        float m_BlinkTimer = 2f;
-        float m_BlinkTime;
         float m_SquintTime;
         float m_WideTime;
         bool m_Worried;
-        bool m_HeadHasBadge;
-        float m_FaceZ = 0.02f;
 
         static readonly Vector3 EyeSize = new Vector3(0.15f, 0.07f, 0.2f);
 
@@ -105,11 +120,10 @@ namespace ExpandPuzzle
             m_Mesh.MarkDynamic();
             m_Filter.sharedMesh = m_Mesh;
 
-            var face = new GameObject("Face");
-            m_Face = face.transform;
-            m_Face.SetParent(m_MeshRoot, false);
-            m_EyeL = MakeEye("EyeL", -0.155f, theme);
-            m_EyeR = MakeEye("EyeR", 0.155f, theme);
+            var faces = new GameObject("Faces");
+            m_FaceRoot = faces.transform;
+            m_FaceRoot.SetParent(m_MeshRoot, false);
+            m_Faces.Add(CreateFace("Face"));   // the head
 
             var badges = new GameObject("Badges");
             m_BadgeRoot = badges.transform;
@@ -118,9 +132,21 @@ namespace ExpandPuzzle
             Snap(cells, head);
         }
 
-        Transform MakeEye(string name, float x, GameTheme theme)
+        Face CreateFace(string name)
         {
-            Transform eye = Primitive(PrimitiveType.Sphere, name, m_Face, theme.eye);
+            var f = new Face();
+            var go = new GameObject(name);
+            f.root = go.transform;
+            f.root.SetParent(m_FaceRoot, false);
+            f.eyeL = MakeEye("EyeL", -0.155f, f.root, m_Theme);
+            f.eyeR = MakeEye("EyeR", 0.155f, f.root, m_Theme);
+            f.blinkTimer = Random.Range(0.8f, 4f);   // every face blinks in its own time
+            return f;
+        }
+
+        Transform MakeEye(string name, float x, Transform parent, GameTheme theme)
+        {
+            Transform eye = Primitive(PrimitiveType.Sphere, name, parent, theme.eye);
             eye.localPosition = new Vector3(x, 0f, 0f);
             eye.localScale = EyeSize;
 
@@ -150,12 +176,47 @@ namespace ExpandPuzzle
             m_Head = head;
             m_Rel.Clear();
             m_RelColor.Clear();
-            Vector2Int min = Vector2Int.zero, max = Vector2Int.zero;
             foreach (var c in cells)
             {
                 var r = c.Key - head;
                 m_Rel.Add(r);
                 m_RelColor[r] = c.Value;
+            }
+
+            BuildMesh();
+            AssignFaces();
+        }
+
+        readonly float[] m_Tuning = new float[9];
+
+        /// <summary>Reads the shape values from the theme. Returns true when any of them changed.</summary>
+        bool ReadTuning()
+        {
+            height = m_Theme.blobHeight;
+            margin = m_Theme.blobMargin;
+            cornerRadius = m_Theme.blobCornerRadius;
+            bevel = m_Theme.blobBevel;
+
+            bool changed = false;
+            for (int i = 0; i < m_Tuning.Length; i++)
+            {
+                float v = i == 0 ? height : i == 1 ? margin : i == 2 ? cornerRadius : i == 3 ? bevel
+                        : i == 4 ? (float)m_Theme.colorSeam : i == 5 ? m_Theme.seamGap : i == 6 ? m_Theme.seamCorner
+                        : i == 7 ? m_Theme.seamBevel : m_Theme.colorBlend;
+                if (m_Tuning[i] != v) changed = true;
+                m_Tuning[i] = v;
+            }
+            return changed;
+        }
+
+        /// <summary>Builds the mesh for the current cells with the current theme values.</summary>
+        void BuildMesh()
+        {
+            ReadTuning();
+
+            Vector2Int min = Vector2Int.zero, max = Vector2Int.zero;
+            foreach (var r in m_Rel)
+            {
                 min = new Vector2Int(Mathf.Min(min.x, r.x), Mathf.Min(min.y, r.y));
                 max = new Vector2Int(Mathf.Max(max.x, r.x), Mathf.Max(max.y, r.y));
             }
@@ -163,17 +224,229 @@ namespace ExpandPuzzle
             var s = CellMesh.Settings.Create(margin, cornerRadius, 0f, height, bevel, true);
             s.cornerSegments = 8;
             s.bevelSegments = 5;
-            CellMesh.Build(m_Rel, s, m_Mesh, m_RelColor, m_Theme.ColorCount);
+            if (m_Theme.colorSeam == ColorSeam.SoftBlend && m_Theme.colorBlend > 0.001f && m_Theme.BlobBlendMaterial != null)
+            {
+                // One piece of jelly; the colours are painted on with a texture so they can run into each other.
+                CellMesh.Build(m_Rel, s, m_Mesh);
+                PaintColors(min, max);
+            }
+            else
+            {
+                // One piece per colour. With "Edge" the pieces do not fuse, so a bevelled edge runs between them.
+                s.splitGroups = m_Theme.colorSeam == ColorSeam.Edge;
+                s.seamMargin = m_Theme.seamGap;
+                s.seamRadius = m_Theme.seamCorner;
+                s.seamBevel = m_Theme.seamBevel;
+                CellMesh.Build(m_Rel, s, m_Mesh, m_RelColor, m_Theme.ColorCount);
+                m_Renderer.sharedMaterials = m_Theme.BlobMaterials;
+            }
 
             // Scale around the middle of the shape so squash and stretch stay centred.
             Vector3 center = new Vector3((min.x + max.x) * 0.5f, 0f, (min.y + max.y) * 0.5f);
             m_Pivot.localPosition = center;
             m_MeshRoot.localPosition = -center;
+
+            // Marks sit on top of the blob, so they follow its height.
+            for (int i = 0; i < m_Badges.Count; i++)
+            {
+                Vector3 p = m_Badges[i].root.localPosition;
+                m_Badges[i].root.localPosition = new Vector3(p.x, height + 0.001f, p.z);
+            }
+        }
+
+        // ---------------------------------------------------------------- colours
+
+        const int TexelsPerCell = 16;
+        Texture2D m_ColorTex;
+        Material m_BlendMaterial;
+        Color32[] m_Pixels;
+        static readonly List<Vector2> s_Uv = new List<Vector2>();
+
+        /// <summary>
+        /// Paints every cell's colour into a small texture, easing from one colour to the next across
+        /// <see cref="GameTheme.colorBlend"/> cells on each side of a seam, and maps the mesh onto it.
+        /// </summary>
+        void PaintColors(Vector2Int min, Vector2Int max)
+        {
+            int cellsX = max.x - min.x + 1, cellsY = max.y - min.y + 1;
+            int w = cellsX * TexelsPerCell, h = cellsY * TexelsPerCell;
+
+            if (m_ColorTex == null || m_ColorTex.width != w || m_ColorTex.height != h)
+            {
+                if (m_ColorTex != null) Destroy(m_ColorTex);
+                m_ColorTex = new Texture2D(w, h, TextureFormat.RGBA32, false);
+                m_ColorTex.name = "Blob colours";
+                m_ColorTex.wrapMode = TextureWrapMode.Clamp;
+                m_ColorTex.filterMode = FilterMode.Bilinear;
+                m_Pixels = new Color32[w * h];
+            }
+
+            float band = Mathf.Max(0.001f, m_Theme.colorBlend);
+            for (int ty = 0; ty < h; ty++)
+            {
+                int cy = ty / TexelsPerCell;
+                float v = (ty % TexelsPerCell + 0.5f) / TexelsPerCell - 0.5f;
+                for (int tx = 0; tx < w; tx++)
+                {
+                    int cx = tx / TexelsPerCell;
+                    float u = (tx % TexelsPerCell + 0.5f) / TexelsPerCell - 0.5f;
+                    m_Pixels[ty * w + tx] = TexelColor(new Vector2Int(min.x + cx, min.y + cy), u, v, band);
+                }
+            }
+            m_ColorTex.SetPixels32(m_Pixels);
+            m_ColorTex.Apply(false);
+
+            // Mesh UVs arrive as grid positions; squeeze them onto the texture.
+            m_Mesh.GetUVs(0, s_Uv);
+            for (int i = 0; i < s_Uv.Count; i++)
+                s_Uv[i] = new Vector2((s_Uv[i].x - (min.x - 0.5f)) / cellsX, (s_Uv[i].y - (min.y - 0.5f)) / cellsY);
+            m_Mesh.SetUVs(0, s_Uv);
+
+            if (m_BlendMaterial == null)
+            {
+                m_BlendMaterial = new Material(m_Theme.BlobBlendMaterial);
+                m_BlendMaterial.name = "Blob (blended colours, instance)";
+            }
+            if (m_BlendMaterial.HasProperty("_BaseMap")) m_BlendMaterial.SetTexture("_BaseMap", m_ColorTex);
+            if (m_BlendMaterial.HasProperty("_MainTex")) m_BlendMaterial.SetTexture("_MainTex", m_ColorTex);
+            m_Renderer.sharedMaterials = new[] { m_BlendMaterial };
+        }
+
+        /// <summary>Colour at a point inside a cell (u, v = -0.5 .. 0.5 from its middle), eased towards the neighbours near its edges.</summary>
+        Color32 TexelColor(Vector2Int cell, float u, float v, float band)
+        {
+            int own;
+            if (!m_RelColor.TryGetValue(cell, out own)) return new Color32(255, 255, 255, 255);   // never shown
+            Color c0 = m_Theme.CellColor(own).linear;
+
+            Vector2Int sx = new Vector2Int(u >= 0f ? 1 : -1, 0);
+            Vector2Int sy = new Vector2Int(0, v >= 0f ? 1 : -1);
+            float wx = SeamWeight(0.5f - Mathf.Abs(u), band);
+            float wy = SeamWeight(0.5f - Mathf.Abs(v), band);
+            if (wx <= 0f && wy <= 0f) return (Color32)c0.gamma;
+
+            int ix, iy, id;
+            bool hasX = m_RelColor.TryGetValue(cell + sx, out ix);
+            bool hasY = m_RelColor.TryGetValue(cell + sy, out iy);
+            bool hasD = m_RelColor.TryGetValue(cell + sx + sy, out id);
+            Color cx = hasX ? m_Theme.CellColor(ix).linear : c0;
+            Color cy = hasY ? m_Theme.CellColor(iy).linear : c0;
+            Color cd;
+            if (hasX && hasY) cd = hasD ? m_Theme.CellColor(id).linear : (cx + cy) * 0.5f;
+            else if (hasX) cd = cx;
+            else if (hasY) cd = cy;
+            else cd = c0;
+
+            // Blending in linear light keeps the seam bright instead of muddy.
+            Color nearRow = Color.Lerp(c0, cx, wx);
+            Color farRow = Color.Lerp(cy, cd, wx);
+            Color mixed = Color.Lerp(nearRow, farRow, wy);
+            mixed.a = 1f;
+            return (Color32)mixed.gamma;
+        }
+
+        /// <summary>0 well inside the cell, rising smoothly to 0.5 exactly on the seam (the neighbour does the other half).</summary>
+        static float SeamWeight(float distanceToEdge, float band)
+        {
+            if (distanceToEdge >= band) return 0f;
+            float p = 0.5f - 0.5f * distanceToEdge / band;   // 0 .. 0.5
+            return p * p * (3f - 2f * p);
+        }
+
+        /// <summary>
+        /// The head keeps the main face. Every other colour in the blob gets a face of its own, on the cell
+        /// nearest the middle of that colour. A face stays on its cell for as long as that cell keeps its colour.
+        /// </summary>
+        void AssignFaces()
+        {
+            int headColor;
+            if (!m_RelColor.TryGetValue(Vector2Int.zero, out headColor)) headColor = 0;
+            m_Faces[0].rel = Vector2Int.zero;
+            m_Faces[0].color = headColor;
+
+            var colors = new List<int>();
+            foreach (var c in m_RelColor)
+                if (c.Value != headColor && !colors.Contains(c.Value)) colors.Add(c.Value);
+            colors.Sort();
+
+            var keep = new HashSet<Face>();
+            for (int i = 0; i < colors.Count; i++)
+            {
+                int color = colors[i];
+
+                // Already has a face on a cell that is still this colour? Leave it where it is.
+                Face face = null;
+                for (int f = 1; f < m_Faces.Count; f++)
+                {
+                    Face old = m_Faces[f];
+                    int now;
+                    if (old.root.gameObject.activeSelf && old.color == color && !keep.Contains(old)
+                        && m_RelColor.TryGetValue(old.rel, out now) && now == color)
+                    {
+                        face = old;
+                        break;
+                    }
+                }
+
+                if (face == null)
+                {
+                    for (int f = 1; f < m_Faces.Count; f++)
+                        if (!m_Faces[f].root.gameObject.activeSelf && !keep.Contains(m_Faces[f])) { face = m_Faces[f]; break; }
+                    if (face == null)
+                    {
+                        face = CreateFace("Face " + (m_Faces.Count + 1));
+                        m_Faces.Add(face);
+                    }
+                    face.rel = MiddleCellOf(color);
+                    face.color = color;
+                    face.hasBadge = false;
+                    face.z = 0.02f;
+                    // Eyes start shut and pop open.
+                    face.eyeL.localScale = new Vector3(EyeSize.x, EyeSize.y, 0f);
+                    face.eyeR.localScale = new Vector3(EyeSize.x, EyeSize.y, 0f);
+                    face.root.gameObject.SetActive(true);
+                }
+                keep.Add(face);
+            }
+
+            for (int f = 1; f < m_Faces.Count; f++)
+                if (!keep.Contains(m_Faces[f])) m_Faces[f].root.gameObject.SetActive(false);
+        }
+
+        /// <summary>The cell of a colour closest to the middle of all cells of that colour.</summary>
+        Vector2Int MiddleCellOf(int color)
+        {
+            Vector2 sum = Vector2.zero;
+            int count = 0;
+            foreach (var c in m_RelColor)
+                if (c.Value == color) { sum += c.Key; count++; }
+            Vector2 middle = count > 0 ? sum / count : Vector2.zero;
+
+            Vector2Int best = Vector2Int.zero;
+            float bestDist = float.MaxValue;
+            foreach (var c in m_RelColor)
+            {
+                if (c.Value != color) continue;
+                float d = ((Vector2)c.Key - middle).sqrMagnitude;
+                // Ties go to the lower-left cell so the choice never depends on dictionary order.
+                bool better = d < bestDist - 0.0001f ||
+                              (Mathf.Abs(d - bestDist) <= 0.0001f && (c.Key.y < best.y || (c.Key.y == best.y && c.Key.x < best.x)));
+                if (better) { best = c.Key; bestDist = d; }
+            }
+            return best;
+        }
+
+        Face FaceOn(Vector2Int rel)
+        {
+            for (int f = 0; f < m_Faces.Count; f++)
+                if (m_Faces[f].root.gameObject.activeSelf && m_Faces[f].rel == rel) return m_Faces[f];
+            return null;
         }
 
         /// <summary>Jump straight to a state (level start, undo).</summary>
         public void Snap(Dictionary<Vector2Int, int> cells, Vector2Int head)
         {
+            WakeUp();
             SetShape(cells, head);
             m_Target = BoardView.CellToLocal(head);
             m_Pos = m_Target;
@@ -192,6 +465,7 @@ namespace ExpandPuzzle
 
         public void MoveTo(Vector2Int head, Vector2Int dir)
         {
+            WakeUp();
             m_Head = head;
             m_Target = BoardView.CellToLocal(head);
             Vector3 along = new Vector3(Mathf.Abs(dir.x), 0f, Mathf.Abs(dir.y));
@@ -200,9 +474,12 @@ namespace ExpandPuzzle
             LookAt(dir);
         }
 
-        public void Grow(Dictionary<Vector2Int, int> cells, Vector2Int head, Vector2Int dir)
+        /// <param name="pulseColor">Colour of the pump (-1 = plain): a wave in that colour runs through the blob to the new cells.</param>
+        public void Grow(Dictionary<Vector2Int, int> cells, Vector2Int head, Vector2Int dir, int pulseColor = -1)
         {
+            WakeUp();
             SetShape(cells, head);
+            StartPulse(dir, pulseColor);
             Vector3 along = new Vector3(Mathf.Abs(dir.x), 0f, Mathf.Abs(dir.y));
             m_ScaleVel += new Vector3(2.6f, 3.4f, 2.6f) + along * 1.6f;
             m_SquintTime = 0.22f;
@@ -213,6 +490,7 @@ namespace ExpandPuzzle
         /// <summary>Walked into something solid.</summary>
         public void Bump(Vector2Int dir)
         {
+            WakeUp();
             Vector3 d = new Vector3(dir.x, 0f, dir.y);
             Vector3 along = new Vector3(Mathf.Abs(dir.x), 0f, Mathf.Abs(dir.y));
             Vector3 across = new Vector3(1f, 0f, 1f) - along;
@@ -225,6 +503,7 @@ namespace ExpandPuzzle
         /// <summary>The "click" when the last tile is covered.</summary>
         public void Settle()
         {
+            WakeUp();
             m_ScaleVel += new Vector3(2.2f, -4.2f, 2.2f);
             m_SquintTime = 0.25f;
         }
@@ -235,6 +514,163 @@ namespace ExpandPuzzle
             m_HopVel = 5.6f;
             m_WideTime = 2f;
             m_ScaleVel += new Vector3(-1.5f, 3f, -1.5f);
+        }
+
+        // ---------------------------------------------------------------- colour pulse
+
+        class PulseDot
+        {
+            public Transform transform;
+            public MeshRenderer renderer;
+            public float delay;
+            public float age = -1f;   // < 0 = not playing
+        }
+
+        readonly List<PulseDot> m_Pulse = new List<PulseDot>();
+        Transform m_PulseRoot;
+        const float PulseStep = 0.045f;    // seconds per cell the wave travels
+        const float PulseLife = 0.24f;
+
+        /// <summary>
+        /// A row-by-row wave of light dots that starts at the pump side and runs to the far side,
+        /// where the new cells are: it shows that what the pump pushed in travelled through the blob.
+        /// </summary>
+        void StartPulse(Vector2Int dir, int pulseColor)
+        {
+            if (m_PulseRoot == null)
+            {
+                var go = new GameObject("Pulse");
+                m_PulseRoot = go.transform;
+                m_PulseRoot.SetParent(m_MeshRoot, false);
+            }
+
+            int minAlong = int.MaxValue;
+            foreach (var r in m_Rel) minAlong = Mathf.Min(minAlong, r.x * dir.x + r.y * dir.y);
+
+            int used = 0;
+            foreach (var cell in m_RelColor)
+            {
+                if (used >= 48) break;
+                PulseDot dot;
+                if (used < m_Pulse.Count) dot = m_Pulse[used];
+                else
+                {
+                    Transform t = Primitive(PrimitiveType.Cylinder, "Dot", m_PulseRoot, null);
+                    dot = new PulseDot { transform = t, renderer = t.GetComponent<MeshRenderer>() };
+                    m_Pulse.Add(dot);
+                }
+                used++;
+
+                int along = cell.Key.x * dir.x + cell.Key.y * dir.y - minAlong;
+                dot.delay = along * PulseStep;
+                dot.age = 0f;
+                dot.renderer.sharedMaterial = m_Theme.GrooveEdgeMaterial(pulseColor >= 0 ? pulseColor : cell.Value);
+                dot.transform.localPosition = new Vector3(cell.Key.x, height + 0.004f, cell.Key.y);
+                dot.transform.localScale = Vector3.zero;
+                dot.transform.gameObject.SetActive(true);
+            }
+            for (int i = used; i < m_Pulse.Count; i++)
+            {
+                m_Pulse[i].age = -1f;
+                m_Pulse[i].transform.gameObject.SetActive(false);
+            }
+        }
+
+        void UpdatePulse(float dt)
+        {
+            for (int i = 0; i < m_Pulse.Count; i++)
+            {
+                PulseDot dot = m_Pulse[i];
+                if (dot.age < 0f) continue;
+                dot.age += dt;
+                float t = (dot.age - dot.delay) / PulseLife;
+                if (t >= 1f)
+                {
+                    dot.age = -1f;
+                    dot.transform.gameObject.SetActive(false);
+                    continue;
+                }
+                float size = t <= 0f ? 0f : Mathf.Sin(t * Mathf.PI) * 0.46f;
+                dot.transform.localScale = new Vector3(size, 0.003f, size);
+            }
+        }
+
+        // ---------------------------------------------------------------- idle life
+
+        /// <summary>
+        /// Where something interesting is, seen from the head, in cells (zero = nothing): the game
+        /// points it at the nearest target that is still open. Bored faces glance that way.
+        /// </summary>
+        [System.NonSerialized] public Vector2 interest;
+
+        const float IdleAfter = 4f;
+        float m_IdleTime;
+        float m_GlanceTimer;
+        int m_Glances;
+
+        /// <summary>Something happened: stop daydreaming.</summary>
+        void WakeUp()
+        {
+            m_IdleTime = 0f;
+            m_GlanceTimer = 0f;
+            for (int f = 0; f < m_Faces.Count; f++) m_Faces[f].glanceTarget = Vector3.zero;
+        }
+
+        void UpdateIdle(float dt)
+        {
+            m_IdleTime += dt;
+            if (m_IdleTime < IdleAfter || m_HopY > 0f) return;
+
+            m_GlanceTimer -= dt;
+            if (m_GlanceTimer > 0f) return;
+
+            // Alternate: look somewhere for a moment, then back to the middle for a while.
+            bool looking = false;
+            for (int f = 0; f < m_Faces.Count; f++)
+                if (m_Faces[f].glanceTarget != Vector3.zero) looking = true;
+
+            if (looking)
+            {
+                for (int f = 0; f < m_Faces.Count; f++) m_Faces[f].glanceTarget = Vector3.zero;
+                m_GlanceTimer = Random.Range(1.6f, 3.4f);
+                return;
+            }
+
+            m_Glances++;
+            int active = 0;
+            for (int f = 0; f < m_Faces.Count; f++)
+                if (m_Faces[f].root.gameObject.activeSelf) active++;
+
+            // With company, every other glance is at each other; otherwise at the open target, or just around.
+            bool atEachOther = active > 1 && m_Glances % 2 == 0;
+            Vector2 around = Random.insideUnitCircle.normalized;
+            for (int f = 0; f < m_Faces.Count; f++)
+            {
+                Face face = m_Faces[f];
+                if (!face.root.gameObject.activeSelf) continue;
+
+                Vector2 to = Vector2.zero;
+                if (atEachOther)
+                {
+                    float best = float.MaxValue;
+                    for (int o = 0; o < m_Faces.Count; o++)
+                    {
+                        if (o == f || !m_Faces[o].root.gameObject.activeSelf) continue;
+                        Vector2 d = m_Faces[o].rel - face.rel;
+                        if (d.sqrMagnitude < best) { best = d.sqrMagnitude; to = d; }
+                    }
+                }
+                else if (interest != Vector2.zero) to = interest - (Vector2)face.rel;
+                if (to == Vector2.zero) to = around;
+
+                to.Normalize();
+                face.glanceTarget = new Vector3(to.x, 0f, to.y) * 0.085f;
+                face.blinkTime = 0.1f;   // a blink goes with turning the eyes
+            }
+            m_GlanceTimer = Random.Range(1.1f, 1.9f);
+
+            // Now and then a little stretch.
+            if (m_Glances % 3 == 0) m_ScaleVel += new Vector3(-0.7f, 1.1f, -0.7f);
         }
 
         void LookAt(Vector2Int dir)
@@ -250,7 +686,7 @@ namespace ExpandPuzzle
         {
             for (int i = 0; i < m_Badges.Count; i++) m_Badges[i].used = false;
             m_Worried = false;
-            m_HeadHasBadge = false;
+            for (int f = 0; f < m_Faces.Count; f++) m_Faces[f].hasBadge = false;
 
             for (int i = 0; i < infos.Count; i++)
             {
@@ -258,7 +694,8 @@ namespace ExpandPuzzle
                 if (info.status == CellStatus.Plain) continue;
                 Vector2Int rel = info.cell - m_Head;
                 if (info.status == CellStatus.Forbidden) m_Worried = true;
-                if (rel == Vector2Int.zero) m_HeadHasBadge = true;
+                Face faceHere = FaceOn(rel);
+                if (faceHere != null) faceHere.hasBadge = true;
 
                 // Keep a badge that already shows the same thing on the same cell (no re-pop).
                 Badge badge = null;
@@ -266,7 +703,7 @@ namespace ExpandPuzzle
                 {
                     Badge c = m_Badges[b];
                     if (!c.used && c.root.gameObject.activeSelf && c.rel == rel && c.status == info.status
-                        && c.needColor == info.needColor && c.cellColor == info.cellColor)
+                        && c.needColor == info.needColor && c.cellColor == info.cellColor && c.onFace == (faceHere != null))
                     {
                         badge = c;
                         break;
@@ -370,8 +807,8 @@ namespace ExpandPuzzle
             b.cellColor = info.cellColor;
             b.age = 0f;
 
-            bool isHead = rel == Vector2Int.zero;
-            b.root.localPosition = new Vector3(rel.x, height + 0.001f, rel.y + (isHead ? 0.2f : 0f));
+            b.onFace = FaceOn(rel) != null;
+            b.root.localPosition = new Vector3(rel.x, height + 0.001f, rel.y + (b.onFace ? 0.2f : 0f));
             b.root.localScale = Vector3.zero;
             b.root.gameObject.SetActive(true);
 
@@ -399,7 +836,7 @@ namespace ExpandPuzzle
                 // Pop in with overshoot.
                 float t = Mathf.Clamp01(b.age / 0.26f) - 1f;
                 float s = 1f + 2.7f * t * t * t + 1.7f * t * t;
-                float baseScale = b.rel == Vector2Int.zero ? 0.8f : 1.22f;
+                float baseScale = b.onFace ? 0.8f : 1.22f;
                 float wiggle = 0f;
 
                 if (b.status == CellStatus.Forbidden || b.status == CellStatus.TargetWrongColor)
@@ -422,6 +859,9 @@ namespace ExpandPuzzle
         void Update()
         {
             float dt = Mathf.Min(Time.deltaTime, 1f / 30f);
+
+            // Shape values changed in the inspector while playing? Rebuild straight away.
+            if (ReadTuning()) BuildMesh();
 
             // Glide to the logical position.
             m_Pos = Vector3.Lerp(m_Pos, m_Target, 1f - Mathf.Exp(-glideSpeed * dt));
@@ -459,46 +899,60 @@ namespace ExpandPuzzle
             scale.z = Mathf.Clamp(scale.z, 0.6f, 1.5f);
             m_Pivot.localScale = scale;
 
+            UpdateIdle(dt);
             UpdateFace(dt);
             UpdateBadges(dt);
+            UpdatePulse(dt);
         }
 
         void UpdateFace(float dt)
         {
-            // Eyes drift towards the last direction, then relax. They step aside for a badge on the head.
+            // Eyes drift towards the last direction, then relax.
             m_LookTimer -= dt;
             if (m_LookTimer <= 0f) m_LookTarget = Vector3.zero;
             m_Look = Vector3.Lerp(m_Look, m_LookTarget, 1f - Mathf.Exp(-14f * dt));
-            m_FaceZ = Mathf.Lerp(m_FaceZ, m_HeadHasBadge ? -0.16f : 0.02f, 1f - Mathf.Exp(-16f * dt));
-            m_Face.localPosition = new Vector3(m_Look.x, height - 0.012f, m_FaceZ + m_Look.z);
 
-            // Blink now and then.
-            m_BlinkTimer -= dt;
-            if (m_BlinkTimer <= 0f)
-            {
-                m_BlinkTimer = Random.Range(1.8f, 4.5f);
-                m_BlinkTime = 0.11f;
-            }
-
-            m_BlinkTime -= dt;
             m_SquintTime -= dt;
             m_WideTime -= dt;
 
-            float open = 1f;
-            if (m_SquintTime > 0f) open = 0.22f;
-            else if (m_BlinkTime > 0f) open = 0.12f;
-            else if (m_WideTime > 0f) open = 1.22f;
-            else if (m_Worried) open = 0.6f;
-
-            Vector3 target = new Vector3(EyeSize.x * (open > 1f ? 1.1f : 1f), EyeSize.y, EyeSize.z * open);
             float k = 1f - Mathf.Exp(-38f * dt);
-            m_EyeL.localScale = Vector3.Lerp(m_EyeL.localScale, target, k);
-            m_EyeR.localScale = Vector3.Lerp(m_EyeR.localScale, target, k);
+            for (int f = 0; f < m_Faces.Count; f++)
+            {
+                Face face = m_Faces[f];
+                if (!face.root.gameObject.activeSelf) continue;
+
+                // Each face steps aside for a badge on its own cell.
+                face.z = Mathf.Lerp(face.z, face.hasBadge ? -0.16f : 0.02f, 1f - Mathf.Exp(-16f * dt));
+                face.glance = Vector3.Lerp(face.glance, face.glanceTarget, 1f - Mathf.Exp(-9f * dt));
+                face.root.localPosition = new Vector3(face.rel.x + m_Look.x + face.glance.x, height - 0.012f,
+                    face.rel.y + face.z + m_Look.z + face.glance.z);
+
+                // Blink now and then, every face in its own rhythm.
+                face.blinkTimer -= dt;
+                if (face.blinkTimer <= 0f)
+                {
+                    face.blinkTimer = Random.Range(1.8f, 4.5f);
+                    face.blinkTime = 0.11f;
+                }
+                face.blinkTime -= dt;
+
+                float open = 1f;
+                if (m_SquintTime > 0f) open = 0.22f;
+                else if (face.blinkTime > 0f) open = 0.12f;
+                else if (m_WideTime > 0f) open = 1.22f;
+                else if (m_Worried) open = 0.6f;
+
+                Vector3 target = new Vector3(EyeSize.x * (open > 1f ? 1.1f : 1f), EyeSize.y, EyeSize.z * open);
+                face.eyeL.localScale = Vector3.Lerp(face.eyeL.localScale, target, k);
+                face.eyeR.localScale = Vector3.Lerp(face.eyeR.localScale, target, k);
+            }
         }
 
         void OnDestroy()
         {
             if (m_Mesh != null) Destroy(m_Mesh);
+            if (m_ColorTex != null) Destroy(m_ColorTex);
+            if (m_BlendMaterial != null) Destroy(m_BlendMaterial);
         }
     }
 }
