@@ -2552,10 +2552,16 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ExpandPuzzle.GameInput
   joystick: {fileID: 2070626667}
-  threshold: 0.45
-  releaseThreshold: 0.25
-  repeatDelay: 0.3
-  repeatInterval: 0.14
+  pushThreshold: 0.35
+  letGoThreshold: 0.2
+  holdDelay: 0.24
+  holdInterval: 0.2
+  fastAfterSteps: 4
+  fastInterval: 0.12
+  swipeFirstStepCm: 0.4
+  swipeMinStepCm: 0.6
+  swipeMaxStepCm: 1.1
+  swipeStepInterval: 0.11
 --- !u!114 &1725995651
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2668,7 +2674,7 @@ MonoBehaviour:
   - {fileID: 8300000, guid: 11b09517fdaa84e4484afe4d3ea847f4, type: 3}
   - {fileID: 8300000, guid: 79667ccf5dba62c4dbee562e6bec6f93, type: 3}
   - {fileID: 8300000, guid: 48ea6c42dac01d64e9ef2a2aec245c65, type: 3}
-  musicVolume: 0.12
+  musicVolume: 0.25
   musicFade: 3
   move:
     clip: {fileID: 8300000, guid: 19f89c6e740e7447f9e12a8310d3e973, type: 3}

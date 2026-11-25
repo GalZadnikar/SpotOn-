@@ -24,7 +24,7 @@ namespace ExpandPuzzle
         [Tooltip("Tracks played one after another in random order. Leave empty for no music.")]
         public AudioClip[] music;
         [Tooltip("Kept low so it sits behind the game sounds.")]
-        [Range(0f, 1f)] public float musicVolume = 0.12f;
+        [Range(0f, 1f)] public float musicVolume = 0.25f;
         [Tooltip("Seconds to fade in at the start of each track and out at its end.")]
         [Range(0f, 10f)] public float musicFade = 3f;
 
