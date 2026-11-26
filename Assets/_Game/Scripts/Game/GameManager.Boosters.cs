@@ -22,6 +22,14 @@ namespace ExpandPuzzle
         public bool freeRefillWhenEmpty = true;
         [Tooltip("How many moves one hint shows, one after another, as long as the player follows them.")]
         [Range(1, 6)] public int hintMoves = 3;
+        [Tooltip("Hint: a hand acts out the move. Off (or no sprite) = arrows on the board.")]
+        public bool hintHand = true;
+        [Tooltip("The tutorial hand (fingertip at the top left).")]
+        public Sprite hintHandSprite;
+        [Tooltip("A soft circle that spreads where the hand presses.")]
+        public Sprite hintPressSprite;
+
+        HintHand m_HintHand;
 
         BoosterBar m_Bar;
         bool m_Aiming, m_BoosterBusy;
@@ -50,6 +58,15 @@ namespace ExpandPuzzle
             m_Bar.Pressed += OnBoosterPressed;
             m_Bar.Tapped += OnBoardTapped;
             m_Bar.Cancelled += CancelAim;
+
+            if (hintHand && hintHandSprite != null)
+            {
+                Canvas canvas = ui.GetComponentInParent<Canvas>();
+                if (canvas != null) canvas = canvas.rootCanvas;
+                // Just above the touch surface: the HUD, the booster bar and the menus stay on top of it.
+                Transform below = input != null && input.joystick != null ? input.joystick.transform : null;
+                m_HintHand = HintHand.Create(canvas, below, hintHandSprite, hintPressSprite);
+            }
 
             // Step back replaces the undo button; only restart stays at the top.
             if (ui.undoButton != null) ui.undoButton.gameObject.SetActive(false);
@@ -99,6 +116,7 @@ namespace ExpandPuzzle
             m_InFlight = 0;
             m_Hint.Clear();
             m_HintArrow = null;   // it lived on the old board
+            if (m_HintHand != null) m_HintHand.Hide();
             if (m_Bar == null) return;
             m_Bar.EndTargeting();
             m_Bar.SetVisible(true);
@@ -564,6 +582,7 @@ namespace ExpandPuzzle
         {
             m_Hint.Clear();
             if (m_HintArrow != null) m_HintArrow.gameObject.SetActive(false);
+            if (m_HintHand != null && !m_BlockHint) m_HintHand.Hide();
         }
 
         void ShowHintArrow(bool withSparkle)
@@ -609,6 +628,9 @@ namespace ExpandPuzzle
             m_HintArrow.gameObject.SetActive(true);
 
             if (withSparkle && fx != null) fx.Play(fx.targetHit, m_Board.transform.TransformPoint(m_HintArrow.localPosition));
+
+            // With the hand, the hand shows the move and the arrows stay away.
+            if (HandSwipe(dir)) m_HintArrow.gameObject.SetActive(false);
         }
 
         void LateUpdate()

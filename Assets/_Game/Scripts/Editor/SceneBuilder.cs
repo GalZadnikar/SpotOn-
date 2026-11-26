@@ -115,6 +115,8 @@ namespace ExpandPuzzle.EditorTools
             // ---- HUD
             GameUI ui = BuildUI(input);
             manager.ui = ui;
+            manager.hintHandSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/DawnOfPlay/Creative/HandCursor/Assets/Sprites/Tutorial hand.png");
+            manager.hintPressSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/_Game/UI/ui_circle.png");
             AddStarEffects();
 
             EnsureEventSystem();

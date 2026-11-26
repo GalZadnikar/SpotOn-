@@ -443,6 +443,8 @@ public bool Step(Vector2Int dir, bool isRepeat)
         /// <summary>Updates pump hints and the marks on top of the blob; sparks on newly hit tiles.</summary>
         void RefreshFeedback(bool withEffects)
         {
+            if (m_Pieces != null) m_Pieces.SetNearby(m_Cells.Keys);   // traps next to the blob get restless
+
             for (int i = 0; i < m_Level.pumps.Count; i++)
                 m_Board.Pumps[i].SetArmed(m_Cells.ContainsKey(m_Level.pumps[i].Nozzle));
 

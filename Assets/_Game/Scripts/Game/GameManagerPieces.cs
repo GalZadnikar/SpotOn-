@@ -49,7 +49,11 @@ namespace ExpandPuzzle
             CancelDrag();
             ClearBlockHint();
             if (pieces != null) m_State.CopyPiecesFrom(pieces);
-            if (m_Pieces != null) m_Pieces.Sync(m_State);
+            if (m_Pieces != null)
+            {
+                m_Pieces.Sync(m_State);
+                m_Pieces.SetNearby(m_Cells.Keys);
+            }
         }
 
         /// <summary>The face needs a cell: when its own was destroyed it moves to the nearest one that is left.</summary>
@@ -249,6 +253,32 @@ namespace ExpandPuzzle
             m_Board.ShowMarkers(new List<Vector2Int> { step.to }, new List<float> { 0.1f });
             if (m_Pieces != null) m_Pieces.HopBlock(step.block);
             if (m_Bar != null) m_Bar.Toast(BoosterType.Hint, "Drag the wall", "Put the wall with the yellow studs on the white dot.", 3f);
+            HandDrag(step);
+        }
+
+        /// <summary>The hand presses on the blob and swipes one cell the way to go (also when that is a pump press).</summary>
+        bool HandSwipe(Vector2Int dir)
+        {
+            Camera cam = cameraFramer != null && cameraFramer.cam != null ? cameraFramer.cam : Camera.main;
+            if (m_HintHand == null || cam == null || m_Blob == null || m_Cells.Count == 0) return false;
+
+            Vector2 middle = Vector2.zero;
+            foreach (var c in m_Cells.Keys) middle += c;
+            middle /= m_Cells.Count;
+            Vector3 a = m_Board.transform.TransformPoint(new Vector3(middle.x, m_Blob.height, middle.y));
+            Vector3 b = m_Board.transform.TransformPoint(new Vector3(middle.x + dir.x, m_Blob.height, middle.y + dir.y));
+            m_HintHand.ShowSwipe(cam, a, b, m_Board.transform.TransformVector(Vector3.right));
+            return true;
+        }
+
+        /// <summary>The hand presses on the movable wall and drags it onto its spot.</summary>
+        void HandDrag(SolveMove step)
+        {
+            Camera cam = cameraFramer != null && cameraFramer.cam != null ? cameraFramer.cam : Camera.main;
+            if (m_HintHand == null || cam == null || m_Pieces == null) return;
+            Vector3 a = m_Board.transform.TransformPoint(m_Pieces.BlockPosition(step.block) + Vector3.up * PiecesView.BlockHeight);
+            Vector3 b = m_Board.CellToWorld(step.to, PiecesView.BlockHeight);
+            m_HintHand.ShowDrag(cam, a, b, m_Board.transform.TransformVector(Vector3.right));
         }
 
         void ClearBlockHint()
@@ -256,6 +286,7 @@ namespace ExpandPuzzle
             if (!m_BlockHint) return;
             m_BlockHint = false;
             if (m_Board != null && m_DragBlock < 0) m_Board.HideMarkers();
+            if (m_HintHand != null) m_HintHand.Hide();
         }
     }
 }

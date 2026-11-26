@@ -2577,6 +2577,9 @@ MonoBehaviour:
   boosters: 1
   freeRefillWhenEmpty: 1
   hintMoves: 3
+  hintHand: 1
+  hintHandSprite: {fileID: 21300000, guid: 9e9f454c3263d794299980e7f9b23f30, type: 3}
+  hintPressSprite: {fileID: 21300000, guid: 8db2a55419e50484cabc076e4309d02a, type: 3}
   input: {fileID: 1725995650}
   ui: {fileID: 675234150}
   cameraFramer: {fileID: 1725995649}

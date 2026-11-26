@@ -385,6 +385,14 @@ namespace ExpandPuzzle
             }
         }
 
+        /// <summary>How far the floor tile on this cell is lifted right now (ripples), so pieces on it can ride along.</summary>
+        public float LiftAt(Vector2Int cell)
+        {
+            for (int i = 0; i < m_Tiles.Count; i++)
+                if (m_Tiles[i].cell == cell) return m_Tiles[i].lift;
+            return 0f;
+        }
+
         // ---------------------------------------------------------------- boosters
 
         /// <summary>A forbidden tile turns into plain floor: its cross flies off and the tile changes colour.</summary>

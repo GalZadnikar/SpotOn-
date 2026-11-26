@@ -26,14 +26,19 @@ namespace ExpandPuzzle
             public Transform root;
             public Vector2Int cell;
             public float phase;
-            public float leaving = -1f;   // >= 0 while it shrinks away
+            public Transform[] spikes;
+            public float[] spikeHeight;
+            public Material rim;
+            public bool near;              // the blob is right next to it
+            public float nearBlend;
+            public float leaving = -1f;    // >= 0 while it snaps and sinks away
         }
 
         readonly List<Block> m_Blocks = new List<Block>();
         readonly List<Trap> m_Traps = new List<Trap>();
         GameTheme m_Theme;
         Mesh m_BlockMesh, m_SpikeMesh, m_LooseMesh;
-        Material m_BlockMaterial, m_PlateMaterial, m_SpikeMaterial;
+        Material m_BlockMaterial, m_SpikeMaterial;
         Transform m_Loose;
         MeshRenderer m_LooseRenderer;
         float m_LoosePop = 1f;
@@ -48,12 +53,10 @@ namespace ExpandPuzzle
             m_BlockMaterial = new Material(theme.boardSurface);
             m_BlockMaterial.name = "Movable wall";
             MaterialFactory.Tint(m_BlockMaterial, MaterialFactory.Shade(palette.pit));
-            m_PlateMaterial = MaterialFactory.Toon(MaterialFactory.Hex(0x3A3340), 0f, 0f);
-            m_SpikeMaterial = MaterialFactory.Toon(MaterialFactory.Hex(0xF4F4F8), 0.3f, 0f);
 
             m_BlockMesh = CellMesh.Build(new[] { Vector2Int.zero }, CellMesh.Settings.Create(0.07f, 0.2f, 0.02f, BlockHeight, 0.09f, false));
             m_BlockMesh.name = "Movable wall";
-            m_SpikeMesh = BuildSpike(0.085f, 0.27f);
+            m_SpikeMesh = BuildCone(14);
 
             var looseGo = new GameObject("Loose body");
             m_Loose = looseGo.transform;
@@ -85,7 +88,10 @@ namespace ExpandPuzzle
             }
 
             for (int i = 0; i < m_Traps.Count; i++)
+            {
                 if (m_Traps[i].root != null) Destroy(m_Traps[i].root.gameObject);
+                if (m_Traps[i].rim != null) Destroy(m_Traps[i].rim);
+            }
             m_Traps.Clear();
             foreach (Vector2Int cell in state.traps) m_Traps.Add(CreateTrap(cell));
 
@@ -147,66 +153,131 @@ namespace ExpandPuzzle
 
         // ---------------------------------------------------------------- traps
 
+        static readonly Color TrapRim = MaterialFactory.Hex(0xFFB23E);       // hazard amber
+        static readonly Color TrapRimHot = MaterialFactory.Hex(0xFFE27A);
+        static readonly Color TrapBody = MaterialFactory.Hex(0x3D3248);      // dark plum
+        static readonly Color TrapPit = MaterialFactory.Hex(0x221B2A);
+        static readonly Color TrapSpike = MaterialFactory.Hex(0xEEF1F8);
+
+        // Centre spike and four around it: x, z, width at the base, height.
+        static readonly Vector4[] SpikeLayout =
+        {
+            new Vector4(0f, 0f, 0.22f, 0.32f),
+            new Vector4(-0.16f, -0.16f, 0.16f, 0.23f), new Vector4(0.16f, -0.16f, 0.16f, 0.23f),
+            new Vector4(-0.16f, 0.16f, 0.16f, 0.23f), new Vector4(0.16f, 0.16f, 0.16f, 0.23f),
+        };
+        const float PitTop = 0.094f;
+
+        Mesh m_TrapRimMesh, m_TrapBodyMesh, m_TrapPitMesh;
+        Material m_TrapBodyMaterial, m_TrapPitMaterial;
+        BoardView m_BoardView;
+
+        void PrepareTrapLook()
+        {
+            if (m_TrapRimMesh != null) return;
+            var one = new[] { Vector2Int.zero };
+            m_TrapRimMesh = CellMesh.Build(one, CellMesh.Settings.Create(0.05f, 0.2f, 0f, 0.07f, 0.03f, false));
+            m_TrapBodyMesh = CellMesh.Build(one, CellMesh.Settings.Create(0.12f, 0.15f, 0f, 0.086f, 0.022f, false));
+            m_TrapPitMesh = CellMesh.Build(one, CellMesh.Settings.Create(0.19f, 0.1f, 0f, PitTop, 0f, false));
+            m_TrapBodyMaterial = MaterialFactory.Toon(TrapBody, 0.1f, 0f);
+            m_TrapPitMaterial = MaterialFactory.Toon(TrapPit, 0f, 0f);
+            m_SpikeMaterial = MaterialFactory.Toon(TrapSpike, 0.5f, 0.25f);
+        }
+
         Trap CreateTrap(Vector2Int cell)
         {
-            var t = new Trap { cell = cell, phase = cell.x * 1.3f + cell.y * 0.7f };
+            PrepareTrapLook();
+            var t = new Trap { cell = cell, phase = cell.x * 1.37f + cell.y * 0.71f };
             var root = new GameObject("Trap");
             t.root = root.transform;
             t.root.SetParent(transform, false);
             t.root.localPosition = BoardView.CellToLocal(cell);
 
-            Transform plate = Primitive(PrimitiveType.Cylinder, "Plate", t.root, m_PlateMaterial);
-            plate.localPosition = new Vector3(0f, 0.05f, 0f);
-            plate.localScale = new Vector3(0.74f, 0.018f, 0.74f);
+            // An amber hazard rim around a dark pit: reads as "danger" in every board colour,
+            // and unlike the forbidden tile (grey with a red cross) it has something sharp inside.
+            t.rim = MaterialFactory.Toon(TrapRim, 0.2f, 0f);
+            MeshPart("Rim", t.root, m_TrapRimMesh, t.rim, false);
+            MeshPart("Body", t.root, m_TrapBodyMesh, m_TrapBodyMaterial, false);
+            MeshPart("Pit", t.root, m_TrapPitMesh, m_TrapPitMaterial, false);
 
-            for (int i = 0; i < 5; i++)
+            t.spikes = new Transform[SpikeLayout.Length];
+            t.spikeHeight = new float[SpikeLayout.Length];
+            for (int i = 0; i < SpikeLayout.Length; i++)
             {
-                var spike = new GameObject("Spike");
-                spike.transform.SetParent(t.root, false);
-                float x = i == 0 ? 0f : (i % 2 == 1 ? -0.19f : 0.19f);
-                float z = i == 0 ? 0f : (i <= 2 ? -0.19f : 0.19f);
-                spike.transform.localPosition = new Vector3(x, 0.066f, z);
-                if (i == 0) spike.transform.localScale = new Vector3(1.15f, 1.2f, 1.15f);
-                spike.AddComponent<MeshFilter>().sharedMesh = m_SpikeMesh;
-                var r = spike.AddComponent<MeshRenderer>();
-                r.sharedMaterial = m_SpikeMaterial;
-                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                Vector4 s = SpikeLayout[i];
+                Transform spike = MeshPart("Spike", t.root, m_SpikeMesh, m_SpikeMaterial, true);
+                spike.localPosition = new Vector3(s.x, PitTop, s.y);
+                t.spikes[i] = spike;
+                t.spikeHeight[i] = s.w;
+                spike.localScale = new Vector3(s.z, s.w, s.z);   // the mesh is a unit cone
             }
             return t;
         }
 
-        /// <summary>The trap on this cell has snapped shut: it shrinks away.</summary>
+        static Transform MeshPart(string name, Transform parent, Mesh mesh, Material material, bool shadows)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            var r = go.AddComponent<MeshRenderer>();
+            r.sharedMaterial = material;
+            r.shadowCastingMode = shadows ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
+            return go.transform;
+        }
+
+        /// <summary>The trap on this cell has snapped shut: the spikes stab up, then it sinks away.</summary>
         public void RemoveTrap(Vector2Int cell)
         {
             for (int i = 0; i < m_Traps.Count; i++)
                 if (m_Traps[i].cell == cell && m_Traps[i].leaving < 0f) m_Traps[i].leaving = 0f;
         }
 
-        /// <summary>A four-sided spike standing on y = 0.</summary>
-        static Mesh BuildSpike(float half, float height)
+        /// <summary>Traps right next to one of these blob cells get restless.</summary>
+        public void SetNearby(IEnumerable<Vector2Int> blob)
         {
+            var cells = new HashSet<Vector2Int>(blob);
+            for (int i = 0; i < m_Traps.Count; i++)
+            {
+                Trap t = m_Traps[i];
+                bool near = false;
+                for (int d = 0; d < Rules.Dirs.Length && !near; d++) near = cells.Contains(t.cell + Rules.Dirs[d]);
+                t.near = near;
+            }
+        }
+
+        /// <summary>A round cone, 1 wide and 1 high, standing on y = 0, with a small blunt tip so it reads as toy-like.</summary>
+        static Mesh BuildCone(int segments)
+        {
+            const float tip = 0.16f;   // radius of the blunt top, relative to the base
             var verts = new List<Vector3>();
             var normals = new List<Vector3>();
             var tris = new List<int>();
-            Vector3 apex = new Vector3(0f, height, 0f);
-            Vector3[] corner =
+            float slope = 0.5f * (1f - tip);   // how far the side leans in over the height
+            for (int i = 0; i <= segments; i++)
             {
-                new Vector3(-half, 0f, -half), new Vector3(-half, 0f, half),
-                new Vector3(half, 0f, half), new Vector3(half, 0f, -half)
-            };
-            for (int i = 0; i < 4; i++)
+                float a = i * Mathf.PI * 2f / segments;
+                var dir = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a));
+                Vector3 n = new Vector3(dir.x, slope, dir.z).normalized;
+                verts.Add(dir * 0.5f); normals.Add(n);
+                verts.Add(dir * 0.5f * tip + Vector3.up); normals.Add(n);
+            }
+            for (int i = 0; i < segments; i++)
             {
-                Vector3 a = corner[i], b = corner[(i + 1) % 4];
-                Vector3 n = Vector3.Cross(a - apex, b - apex);
-                if (n.y < 0f)
-                {
-                    Vector3 swap = a; a = b; b = swap;
-                    n = -n;
-                }
-                int at = verts.Count;
-                verts.Add(apex); verts.Add(a); verts.Add(b);
-                for (int k = 0; k < 3; k++) normals.Add(n.normalized);
-                tris.Add(at); tris.Add(at + 1); tris.Add(at + 2);
+                int k = i * 2;
+                tris.Add(k); tris.Add(k + 1); tris.Add(k + 3);
+                tris.Add(k); tris.Add(k + 3); tris.Add(k + 2);
+            }
+            int centre = verts.Count;
+            verts.Add(Vector3.up); normals.Add(Vector3.up);
+            for (int i = 0; i <= segments; i++)
+            {
+                float a = i * Mathf.PI * 2f / segments;
+                verts.Add(new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * 0.5f * tip + Vector3.up);
+                normals.Add(Vector3.up);
+            }
+            for (int i = 0; i < segments; i++)
+            {
+                tris.Add(centre); tris.Add(centre + 2 + i); tris.Add(centre + 1 + i);
             }
             var mesh = new Mesh { name = "Spike" };
             mesh.SetVertices(verts);
@@ -214,6 +285,74 @@ namespace ExpandPuzzle
             mesh.SetTriangles(tris, 0);
             mesh.RecalculateBounds();
             return mesh;
+        }
+
+        /// <summary>How far out the spikes are (1 = normal) at this point of their rhythm.</summary>
+        static float SpikeRhythm(float u)
+        {
+            // Pull in, wait, stab out with an overshoot, settle.
+            if (u < 0.28f) return Mathf.Lerp(1f, 0.25f, Smooth(u / 0.28f));
+            if (u < 0.46f) return 0.25f;
+            if (u < 0.56f) return Mathf.Lerp(0.25f, 1.3f, (u - 0.46f) / 0.1f);
+            if (u < 0.85f) return Mathf.Lerp(1.3f, 1f, Smooth((u - 0.56f) / 0.29f));
+            return 1f;
+        }
+
+        static float Smooth(float k)
+        {
+            k = Mathf.Clamp01(k);
+            return k * k * (3f - 2f * k);
+        }
+
+        void UpdateTraps(float dt)
+        {
+            if (m_BoardView == null) m_BoardView = GetComponentInParent<BoardView>();
+            for (int i = m_Traps.Count - 1; i >= 0; i--)
+            {
+                Trap t = m_Traps[i];
+                float lift = m_BoardView != null ? m_BoardView.LiftAt(t.cell) : 0f;   // ride the floor ripples
+                Vector3 home = BoardView.CellToLocal(t.cell) + Vector3.up * lift;
+
+                if (t.leaving >= 0f)
+                {
+                    // Snap: every spike stabs up at once and the rim flashes, then the trap sinks into the floor.
+                    t.leaving += dt / 0.5f;
+                    if (t.leaving >= 1f)
+                    {
+                        if (t.rim != null) Destroy(t.rim);
+                        Destroy(t.root.gameObject);
+                        m_Traps.RemoveAt(i);
+                        continue;
+                    }
+                    float stab = t.leaving < 0.15f ? Mathf.Lerp(1f, 1.75f, t.leaving / 0.15f) : 1.75f;
+                    for (int s = 0; s < t.spikes.Length; s++)
+                        t.spikes[s].localScale = new Vector3(SpikeLayout[s].z, t.spikeHeight[s] * stab, SpikeLayout[s].z);
+                    float sink = Smooth((t.leaving - 0.25f) / 0.75f);
+                    t.root.localPosition = home + Vector3.down * 0.14f * sink;
+                    float size = 1f - 0.45f * sink;
+                    t.root.localScale = new Vector3(size, 1f - 0.8f * sink, size);
+                    MaterialFactory.Tint(t.rim, Color.Lerp(Color.white, TrapRim, Smooth(t.leaving / 0.3f)));
+                    continue;
+                }
+
+                t.root.localPosition = home;
+
+                // Restless when the blob is next door: quicker, sharper pokes and a pulsing rim.
+                t.nearBlend = Mathf.MoveTowards(t.nearBlend, t.near ? 1f : 0f, dt * 4f);
+                float cycle = Mathf.Lerp(2.8f, 1.1f, t.nearBlend);
+                t.phase += dt / cycle;
+                for (int s = 0; s < t.spikes.Length; s++)
+                {
+                    // The outer spikes follow the centre one a moment later: a little wave.
+                    float u = Mathf.Repeat(t.phase - (s == 0 ? 0f : 0.035f + 0.012f * s), 1f);
+                    float h = SpikeRhythm(u);
+                    float fat = 1f + (1f - h) * 0.25f;
+                    t.spikes[s].localScale = new Vector3(SpikeLayout[s].z * fat, t.spikeHeight[s] * h, SpikeLayout[s].z * fat);
+                }
+                float glow = t.nearBlend * (0.5f + 0.5f * Mathf.Sin(Time.time * 9f + t.cell.x));
+                MaterialFactory.Tint(t.rim, Color.Lerp(TrapRim, TrapRimHot, glow));
+                t.root.localScale = Vector3.one;
+            }
         }
 
         // ---------------------------------------------------------------- loose body
@@ -262,26 +401,7 @@ namespace ExpandPuzzle
                 b.root.localScale = new Vector3(size, 1f, size);
             }
 
-            for (int i = m_Traps.Count - 1; i >= 0; i--)
-            {
-                Trap t = m_Traps[i];
-                if (t.leaving >= 0f)
-                {
-                    t.leaving += dt / 0.22f;
-                    if (t.leaving >= 1f)
-                    {
-                        Destroy(t.root.gameObject);
-                        m_Traps.RemoveAt(i);
-                        continue;
-                    }
-                    float k = 1f - t.leaving;
-                    t.root.localScale = new Vector3(k, k * 1.6f, k);
-                    continue;
-                }
-                // The spikes breathe a little, so a trap never looks like a harmless floor pattern.
-                float beat = Mathf.Sin(Time.time * 3.2f + t.phase);
-                t.root.localScale = new Vector3(1f, 1f + 0.14f * beat, 1f);
-            }
+            UpdateTraps(dt);
 
             if (m_LoosePop < 1f)
             {
@@ -310,7 +430,12 @@ namespace ExpandPuzzle
             if (m_SpikeMesh != null) Destroy(m_SpikeMesh);
             if (m_LooseMesh != null) Destroy(m_LooseMesh);
             if (m_BlockMaterial != null) Destroy(m_BlockMaterial);
-            if (m_PlateMaterial != null) Destroy(m_PlateMaterial);
+            if (m_TrapBodyMaterial != null) Destroy(m_TrapBodyMaterial);
+            if (m_TrapPitMaterial != null) Destroy(m_TrapPitMaterial);
+            if (m_TrapRimMesh != null) Destroy(m_TrapRimMesh);
+            if (m_TrapBodyMesh != null) Destroy(m_TrapBodyMesh);
+            if (m_TrapPitMesh != null) Destroy(m_TrapPitMesh);
+            for (int i = 0; i < m_Traps.Count; i++) if (m_Traps[i].rim != null) Destroy(m_Traps[i].rim);
             if (m_SpikeMaterial != null) Destroy(m_SpikeMaterial);
         }
     }
