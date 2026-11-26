@@ -500,6 +500,15 @@ namespace ExpandPuzzle
             LookAt(dir);
         }
 
+        /// <summary>A booster blew one block away: a startled squash and wide eyes.</summary>
+        public void Startle()
+        {
+            WakeUp();
+            m_ScaleVel += new Vector3(-3.2f, 4.6f, -3.2f);
+            m_SquintTime = 0.12f;
+            m_WideTime = 0.9f;
+        }
+
         /// <summary>The "click" when the last tile is covered.</summary>
         public void Settle()
         {

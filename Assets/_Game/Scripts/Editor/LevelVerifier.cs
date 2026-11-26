@@ -25,7 +25,7 @@ namespace ExpandPuzzle.EditorTools
                 string note = "ok";
                 if (!r.solvable) { note = r.complete ? "NOT SOLVABLE" : "search limit reached"; problems++; }
                 else if (r.par != lvl.par) { note = "PAR SHOULD BE " + r.par; problems++; }
-                sb.AppendLine("Level " + (i + 1) + ": par " + lvl.par + ", solver " + (r.solvable ? r.par.ToString() : "-") +
+                sb.AppendLine(lvl.name + " (#" + (i + 1) + "): par " + lvl.par + ", solver " + (r.solvable ? r.par.ToString() : "-") +
                               ", " + r.states + " positions, " + note);
             }
             sb.Insert(0, "Verified " + Levels.Count + " levels, " + problems + " problem(s)\n");

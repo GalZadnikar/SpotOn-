@@ -17,16 +17,17 @@ namespace ExpandPuzzle.EditorTools
         const float PanelWidth = 264f;      // left column
         const float PanelInner = 246f;      // what fits in it next to a vertical scrollbar
 
-        enum Tool { Wall, Floor, Head, Body, Target, Forbidden, PumpUp, PumpDown, PumpLeft, PumpRight, Recolor }
+        enum Tool { Wall, Floor, Head, Body, Target, Forbidden, PumpUp, PumpDown, PumpLeft, PumpRight, MovableWall, LooseBody, Trap, Recolor }
 
         static readonly string[] ToolNames =
         {
             "Wall", "Floor", "Blob head", "Blob body", "Target", "Forbidden",
-            "Pump up", "Pump down", "Pump left", "Pump right", "Colour only"
+            "Pump up", "Pump down", "Pump left", "Pump right", "Movable wall", "Loose body", "Trap", "Colour only"
         };
-        static readonly char[] ToolChars = { '#', '.', 'H', 'P', 'T', 'X', '^', 'v', '<', '>', ' ' };
+        static readonly char[] ToolChars = { '#', '.', 'H', 'P', 'T', 'X', '^', 'v', '<', '>', 'W', 'B', '*', ' ' };
         static readonly string[] Ratings = { "not rated", "1", "2", "3", "4", "5", "X (bad)" };
         static readonly string[] RatingValues = { "", "1", "2", "3", "4", "5", "X" };
+        static readonly string[] SectionNames = { "Base", "Test (experiments)" };
 
         // Same colours as the game's default theme, so the grid reads like the level.
         static readonly Color[] CellColors =
@@ -43,6 +44,7 @@ namespace ExpandPuzzle.EditorTools
             public int par;
             public string note = "";
             public string rating = "";
+            public string section = "";   // "" = Base
         }
 
         // Survives script reloads and entering Play mode, so unsaved work is never lost by pressing Test.
@@ -154,6 +156,7 @@ namespace ExpandPuzzle.EditorTools
             l.par = def.par;
             l.note = def.note ?? "";
             l.rating = def.rating ?? "";
+            l.section = def.section ?? "";
             for (int r = 0; r < h; r++)
                 for (int x = 0; x < w; x++)
                 {
@@ -172,7 +175,7 @@ namespace ExpandPuzzle.EditorTools
 
         static LevelDef ToDef(EditLevel l)
         {
-            var def = new LevelDef { par = l.par, note = l.note, rating = l.rating, rows = new string[l.h] };
+            var def = new LevelDef { par = l.par, note = l.note, rating = l.rating, section = l.section, rows = new string[l.h] };
             bool anyColor = false;
             var colors = new string[l.h];
             for (int r = 0; r < l.h; r++)
@@ -196,7 +199,7 @@ namespace ExpandPuzzle.EditorTools
 
         static bool TakesColor(char ch)
         {
-            return ch == 'H' || ch == 'P' || ch == 'T' || ch == '^' || ch == 'v' || ch == '<' || ch == '>';
+            return ch == 'H' || ch == 'P' || ch == 'B' || ch == 'T' || ch == '^' || ch == 'v' || ch == '<' || ch == '>';
         }
 
         // ------------------------------------------------------------ editing
@@ -415,25 +418,19 @@ namespace ExpandPuzzle.EditorTools
                 int presses = 0;
                 var sb = new System.Text.StringBuilder();
                 // Count pump presses by replaying the solution.
-                var cells = new Dictionary<Vector2Int, int>();
-                for (int i = 0; i < data.startCells.Count; i++) cells[data.startCells[i]] = data.startColors[i];
-                foreach (Vector2Int d in result.moves)
+                BoardState replay = BoardState.Start(data);
+                foreach (SolveMove step in result.steps)
                 {
-                    // Map rows are written top to bottom, so "up" on the grid is +y in the game.
+                    if (step.block >= 0)
+                    {
+                        // A movable wall is dragged. Rows are counted from the top, the way the grid shows them.
+                        sb.Append("[wall to column " + (step.to.x + 1) + ", row " + (data.height - step.to.y) + "] ");
+                        replay.blocks[step.block] = step.to;
+                        continue;
+                    }
+                    Vector2Int d = step.dir;
                     sb.Append(d == Vector2Int.up ? "U " : d == Vector2Int.down ? "D " : d == Vector2Int.left ? "L " : "R ");
-                    if (Rules.CanMove(data, cells, d))
-                    {
-                        var moved = new Dictionary<Vector2Int, int>();
-                        foreach (var c in cells) moved[c.Key + d] = c.Value;
-                        cells = moved;
-                    }
-                    else
-                    {
-                        int p = Rules.FindPushedPump(data, cells, d);
-                        if (p < 0) continue;
-                        foreach (var a in Rules.GrowCells(data, cells, data.pumps[p])) cells[a.Key] = a.Value;
-                        presses++;
-                    }
+                    if (Play.Step(data, replay, d).kind == StepKind.Pump) presses++;
                 }
                 m_Solution = sb.ToString().Trim();
                 m_Status = "Solvable.  Par " + result.par + " moves, " + presses + " pump " + (presses == 1 ? "press" : "presses") +
@@ -451,7 +448,7 @@ namespace ExpandPuzzle.EditorTools
 
         static bool IsFloorChar(char ch)
         {
-            return ch == '.' || ch == 'H' || ch == 'P' || ch == 'T' || ch == 'X';
+            return ch == '.' || ch == 'H' || ch == 'P' || ch == 'T' || ch == 'X' || ch == 'W' || ch == 'B' || ch == '*';
         }
 
         // ------------------------------------------------------------ file + play
@@ -542,6 +539,7 @@ namespace ExpandPuzzle.EditorTools
             int typed = EditorGUILayout.DelayedIntField(m_Index + 1, GUILayout.Width(36f));
             if (typed != m_Index + 1) Select(typed - 1);
             GUILayout.Label("of " + m_Levels.Count, GUILayout.Width(44f));
+            GUILayout.Label(Levels.IsBase(Current.section) ? "Base" : Current.section, EditorStyles.miniBoldLabel, GUILayout.Width(40f));
             using (new EditorGUI.DisabledScope(m_Index >= m_Levels.Count - 1))
                 if (GUILayout.Button(">", EditorStyles.toolbarButton, GUILayout.Width(24f))) Select(m_Index + 1);
 
@@ -549,8 +547,10 @@ namespace ExpandPuzzle.EditorTools
             if (GUILayout.Button("New", EditorStyles.toolbarButton))
             {
                 PushUndo();
-                m_Levels.Add(NewLevel(7, 6));
-                m_Index = m_Levels.Count - 1;
+                var fresh = NewLevel(7, 6);
+                fresh.section = Current.section;   // a new level joins the list (Base / Test) it was made in
+                m_Levels.Insert(m_Index + 1, fresh);
+                m_Index++;
                 Changed();
             }
             if (GUILayout.Button("Duplicate", EditorStyles.toolbarButton))
@@ -656,11 +656,14 @@ namespace ExpandPuzzle.EditorTools
             EditorGUI.BeginChangeCheck();
             int rating = Mathf.Max(0, System.Array.IndexOf(RatingValues, l.rating));
             rating = EditorGUILayout.Popup("My rating", rating, Ratings);
+            int sectionWas = Levels.IsBase(l.section) ? 0 : 1;
+            int sectionNow = EditorGUILayout.Popup("Section", sectionWas, SectionNames);
             GUILayout.Label("Note");
             string note = EditorGUILayout.TextArea(l.note, WrappedArea, GUILayout.Width(PanelInner - 4f), GUILayout.MinHeight(52f));
             if (EditorGUI.EndChangeCheck())
             {
                 l.rating = RatingValues[rating];
+                if (sectionNow != sectionWas) l.section = sectionNow == 0 ? "" : "Test";
                 l.note = note.Replace("\n", " ");
                 m_Dirty = true;
                 Sync();
@@ -851,6 +854,22 @@ namespace ExpandPuzzle.EditorTools
                     EditorGUI.DrawRect(new Rect(r.center.x - off - eye * 0.5f, r.center.y - eye * 0.5f, eye, eye), new Color(0.15f, 0.14f, 0.18f));
                     EditorGUI.DrawRect(new Rect(r.center.x + off - eye * 0.5f, r.center.y - eye * 0.5f, eye, eye), new Color(0.15f, 0.14f, 0.18f));
                 }
+            }
+            else if (ch == 'B')
+            {
+                // Loose body: blob colour, smaller and paler, no face.
+                float inset = Mathf.Round(r.width * 0.22f);
+                EditorGUI.DrawRect(new Rect(r.x + inset, r.y + inset, r.width - inset * 2f, r.height - inset * 2f), Color.Lerp(own, Color.white, 0.25f));
+            }
+            else if (ch == 'W')
+            {
+                EditorGUI.DrawRect(inner, new Color(0.25f, 0.42f, 0.33f));
+                Glyph(r, "W", new Color(1f, 0.78f, 0.18f));
+            }
+            else if (ch == '*')
+            {
+                EditorGUI.DrawRect(inner, new Color(0.23f, 0.2f, 0.25f));
+                Glyph(r, "*", Color.white);
             }
             else if (pump)
             {

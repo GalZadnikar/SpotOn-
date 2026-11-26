@@ -213,6 +213,13 @@ namespace ExpandPuzzle.EditorTools
             Clip(a.undo, 31);
             Clip(a.restart, 46);        // downward slide
             Clip(a.click, 40);          // tiny tick
+            Clip(a.boosterSelect, 44);  // short bright blip
+            Clip(a.boosterThrow, 19);   // airy, rising: a whoosh
+            Clip(a.boosterPop, 39);     // noisy burst that falls away
+            Clip(a.boosterClear, 28);   // rising, with some air in it
+            Clip(a.boosterHint, 26);    // quick climbing notes
+            Clip(a.boosterDeny, 41);    // short flat phrase
+            Clip(a.boosterRefill, 15);  // quick sparkle
             AssignMusic(a);
             EditorUtility.SetDirty(a);
         }

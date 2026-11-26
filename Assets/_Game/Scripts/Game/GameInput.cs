@@ -108,6 +108,17 @@ namespace ExpandPuzzle
             return SwipeStep(out dir, out isRepeat);
         }
 
+        /// <summary>
+        /// The touch that is down right now is used for something else (dragging a movable wall):
+        /// it must not turn into steps. Call every frame for as long as that lasts.
+        /// </summary>
+        public void CancelSwipe()
+        {
+            m_SwipeLive = false;
+            m_Held = Vector2Int.zero;
+            if (m_Pad != null) m_TouchSerial = m_Pad.TouchSerial;
+        }
+
         // ---------------------------------------------------------------- mode
 
         void ApplyMode()

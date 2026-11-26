@@ -64,6 +64,21 @@ namespace ExpandPuzzle
         public Sound restart = new Sound { volume = 0.5f };
         public Sound click = new Sound { volume = 0.5f };
 
+        [Header("Boosters")]
+        [Tooltip("A booster that needs a target was picked up.")]
+        public Sound boosterSelect = new Sound { volume = 0.55f };
+        [Tooltip("The bomb or the star leaves its button.")]
+        public Sound boosterThrow = new Sound { volume = 0.6f };
+        [Tooltip("The bomb goes off and a block is gone.")]
+        public Sound boosterPop = new Sound { volume = 0.85f };
+        [Tooltip("The star lands and a forbidden tile is gone.")]
+        public Sound boosterClear = new Sound { volume = 0.75f };
+        public Sound boosterHint = new Sound { volume = 0.65f };
+        [Tooltip("Not possible right now, or a tap that was no valid target.")]
+        public Sound boosterDeny = new Sound { volume = 0.5f };
+        [Tooltip("An empty booster was topped up.")]
+        public Sound boosterRefill = new Sound { volume = 0.6f };
+
         const string Key = "ExpandPuzzle.Sound";
         const int Voices = 6;
 

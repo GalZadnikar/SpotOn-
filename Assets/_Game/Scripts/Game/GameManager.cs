@@ -8,7 +8,7 @@ namespace ExpandPuzzle
     /// Runs the game: loads levels, applies the rules to player input, keeps undo history
     /// and tells the views and effects what happened.
     /// </summary>
-    public class GameManager : MonoBehaviour
+    public partial class GameManager : MonoBehaviour
     {
         [Header("Scene references (all optional - missing ones are created or skipped)")]
         public GameInput input;
@@ -58,7 +58,10 @@ namespace ExpandPuzzle
         /// <summary>With <see cref="lockLevels"/> on, a level opens once the one before it is solved.</summary>
         public bool IsUnlocked(int index)
         {
-            return !lockLevels || index <= 0 || BestStars(index - 1) > 0;
+            if (!lockLevels || index <= 0) return true;
+            // Only the campaign is locked step by step; test levels are always open.
+            if (Levels.SectionOf(index) != Levels.BaseSection || Levels.SectionOf(index - 1) != Levels.BaseSection) return true;
+            return BestStars(index - 1) > 0;
         }
 
         struct Snapshot
@@ -66,6 +69,8 @@ namespace ExpandPuzzle
             public Vector2Int[] cells;
             public int[] colors;
             public Vector2Int head;
+            public int moves;
+            public BoardState pieces;   // walls, loose body and traps at that moment
         }
 
         LevelData m_Level;
@@ -156,13 +161,14 @@ namespace ExpandPuzzle
 #endif
             if (ui != null)
             {
-                ui.BuildPicker(Levels.Count, i => Levels.Load(i).UsesColor, BestStars, IsUnlocked);
+                ui.BuildPicker(Levels.Count, i => Levels.Load(i).UsesColor, BestStars, IsUnlocked, Levels.SectionOf, Levels.NumberInSection);
                 ui.AddPickerToggle("Swipe controls", () => GameInput.SwipeMode, () => GameInput.SwipeMode = !GameInput.SwipeMode);
                 ui.AddPickerToggle("Sound", () => GameAudio.Enabled, () => GameAudio.Enabled = !GameAudio.Enabled);
                 ui.AddPickerToggle("Vibration", () => Haptics.Enabled, () => { Haptics.Enabled = !Haptics.Enabled; Haptics.Medium(); });
                 if (fx != null)
                     ui.AddPickerToggle("Star particles on win", () => fx.starParticlesOnWin, () => fx.starParticlesOnWin = !fx.starParticlesOnWin);
             }
+            SetupBoosters();
             LoadLevel(index, true);
         }
 
@@ -170,17 +176,20 @@ namespace ExpandPuzzle
         {
             Vector2Int dir;
             bool isRepeat;
+            bool dragging = UpdateBlockDrag();   // a finger on a movable wall moves the wall, not the blob
             input.cellPixels = CellPixels();
             bool stepped = input.TryGetStep(out dir, out isRepeat);
 
             if (input.ToggleFxPressed && fx != null) fx.starParticlesOnWin = !fx.starParticlesOnWin;
             if (ui != null && ui.PickerOpen) return;
+            if (BoostersBlockInput()) return;   // aiming a booster, or one is in flight
 
             if (input.RestartPressed) { Restart(); return; }
             if (input.UndoPressed) { Undo(); return; }
             if (input.SkipPressed) { LoadLevel(m_LevelIndex + 1, true); return; }
             if (input.BackPressed) { LoadLevel(m_LevelIndex - 1, true); return; }
 
+            if (dragging || Time.unscaledTime < m_DragCooldown) return;
             if (stepped) Step(dir, isRepeat);
         }
 
@@ -231,6 +240,7 @@ namespace ExpandPuzzle
 
             m_Level = Levels.Load(m_LevelIndex);
             if (fitLevelToScreen) m_Level = BestOrientation(m_Level);
+            BoostersBeforeBoard();   // tiles a booster removed stay removed on a restart
 
             if (m_Board != null) Destroy(m_Board.gameObject);
             m_Blob = null;
@@ -253,6 +263,8 @@ namespace ExpandPuzzle
             m_Solved = false;
             m_Status.Clear();
 
+            PiecesAfterBoardBuilt();
+
             var blobGo = new GameObject("Blob");
             blobGo.transform.SetParent(boardGo.transform, false);
             m_Blob = blobGo.AddComponent<BlobView>();
@@ -268,7 +280,9 @@ namespace ExpandPuzzle
 
             if (ui != null)
             {
-                ui.SetLevel(m_LevelIndex + 1, Levels.Count);
+                string section = Levels.SectionOf(m_LevelIndex);
+                ui.SetLevel(Levels.NumberInSection(m_LevelIndex), Levels.Count,
+                    section == Levels.BaseSection ? "LEVEL" : section.ToUpper(), m_LevelIndex);
                 ui.SetInk(surface);
             }
             UpdateMovesUi();
@@ -279,6 +293,7 @@ namespace ExpandPuzzle
             m_Blob.DropIn();
             m_Board.Ripple(m_Head, 0.06f, 16f);
             sound.Play(sound.levelStart);
+            BoostersAfterLevelBuilt();
         }
 
         int m_PumpStreak;    // pump presses in a row: each one sounds a little higher
@@ -309,79 +324,96 @@ namespace ExpandPuzzle
         // ---------------------------------------------------------------- rules
 
         /// <summary>One push of the stick. Returns true when something changed.</summary>
-        public bool Step(Vector2Int dir, bool isRepeat)
+public bool Step(Vector2Int dir, bool isRepeat)
         {
             if (m_Solved || m_Level == null) return false;
 
-            if (Rules.CanMove(m_Level, m_Cells, dir))
-            {
-                PushUndo();
-                var moved = new List<KeyValuePair<Vector2Int, int>>(m_Cells.Count);
-                foreach (var c in m_Cells) moved.Add(new KeyValuePair<Vector2Int, int>(c.Key + dir, c.Value));
-                m_Cells.Clear();
-                foreach (var c in moved) m_Cells[c.Key] = c.Value;
-                m_Head += dir;
-                m_Blob.MoveTo(m_Head, dir);
-                m_PumpStreak = 0;
-                sound.Play(sound.move);
-                Haptics.Tick();   // one tick per cell, so steps can be counted by feel
-                AfterChange();
-                return true;
-            }
+            // The rules change the board in place, so the undo step is taken first and dropped again
+            // when nothing happened. A pump only fires on a fresh push, so holding the stick against
+            // the wall cannot over-inflate by accident.
+            PushUndo();
+            StepResult r = Play.Step(m_Level, m_State, dir, !isRepeat);
 
-            // Blocked. Pushing into a pump we are touching inflates us - but only on a fresh push,
-            // so holding the stick against the wall cannot over-inflate by accident.
-            int pumpIndex = Rules.FindPushedPump(m_Level, m_Cells, dir);
-            if (pumpIndex >= 0)
+            if (r.kind == StepKind.None)
             {
+                m_Undo.Pop();
                 if (isRepeat) return false;
 
-                PumpData pump = m_Level.pumps[pumpIndex];
-                PumpView view = m_Board.Pumps[pumpIndex];
-                List<KeyValuePair<Vector2Int, int>> added = Rules.GrowCells(m_Level, m_Cells, pump);
-                view.Fire(added.Count > 0);
-                if (fx != null) fx.Play(fx.pumpPuff, view.NozzlePosition, view.BlowDirection);
-
-                if (added.Count > 0)
+                if (r.pump >= 0)
                 {
-                    PushUndo();
-                    foreach (var c in added) m_Cells[c.Key] = c.Value;
-                    m_Blob.Grow(m_Cells, m_Head, pump.dir, pump.color);
-                    m_PumpStreak++;
-                    float rise = 1f + sound.pumpPitchStep * Mathf.Min(m_PumpStreak - 1, 10);
-                    sound.Play(sound.pump, rise);
-                    sound.Play(sound.grow, rise);
-                    Haptics.Medium();
-                    if (fx != null)
-                    {
-                        int shown = Mathf.Min(added.Count, 8);
-                        for (int i = 0; i < shown; i++)
-                            fx.Play(fx.growPop, m_Board.CellToWorld(added[i].Key, m_Blob.height));
-                    }
-                    if (cameraFramer != null) cameraFramer.Punch(0.25f);
-                    AfterChange();
-                    return true;
+                    PumpView dry = m_Board.Pumps[r.pump];
+                    dry.Fire(false);
+                    if (fx != null) fx.Play(fx.pumpPuff, dry.NozzlePosition, dry.BlowDirection);
                 }
-            }
 
-            if (!isRepeat)
-            {
                 m_Blob.Bump(dir);
                 sound.Play(sound.bump);
                 Haptics.Light();
                 if (fx != null)
                 {
-                    // Puff where the blob meets the wall.
+                    // Puff where the blob meets whatever stopped it.
                     foreach (var c in m_Cells)
                     {
-                        if (m_Level.IsFloor(c.Key + dir)) continue;
+                        if (!Play.Solid(m_Level, m_State, c.Key + dir) && !m_State.traps.Contains(c.Key + dir)) continue;
                         Vector3 p = m_Board.CellToWorld(c.Key, m_Blob.height * 0.6f) + new Vector3(dir.x, 0f, dir.y) * 0.5f;
                         fx.Play(fx.bump, p, new Vector3(-dir.x, 0.6f, -dir.y));
                         break;
                     }
                 }
+                return false;
             }
-            return false;
+
+            ClearBlockHint();
+            for (int i = 0; i < r.popped.Count; i++) TrapSnap(r.popped[i].Key, r.popped[i].Value);
+            if (r.merged.Count > 0) m_Pieces.SetLoose(m_State.loose);
+
+            if (r.kind == StepKind.Move)
+            {
+                m_Head += dir;
+                if (r.popped.Count > 0)
+                {
+                    // A trap took a cell (maybe the one with the face): rebuild the shape.
+                    FixHead();
+                    m_Blob.Snap(m_Cells, m_Head);
+                    m_Blob.Startle();
+                }
+                else m_Blob.MoveTo(m_Head, dir);
+                m_PumpStreak = 0;
+                sound.Play(sound.move);
+                Haptics.Tick();   // one tick per cell, so steps can be counted by feel
+            }
+            else if (r.kind == StepKind.Merge)
+            {
+                // Pushed into loose body: it joins the blob, the blob stays where it is.
+                m_Blob.Grow(m_Cells, m_Head, dir, -1);
+                m_PumpStreak = 0;
+                sound.Play(sound.grow);
+                Haptics.Medium();
+                GrowPops(r.merged);
+                if (cameraFramer != null) cameraFramer.Punch(0.2f);
+            }
+            else
+            {
+                PumpData pump = m_Level.pumps[r.pump];
+                PumpView view = m_Board.Pumps[r.pump];
+                view.Fire(true);
+                if (fx != null) fx.Play(fx.pumpPuff, view.NozzlePosition, view.BlowDirection);
+
+                if (r.added.Count + r.merged.Count > 0) m_Blob.Grow(m_Cells, m_Head, pump.dir, pump.color);
+                else m_Blob.Startle();   // everything that grew went straight into a trap
+                m_PumpStreak++;
+                float rise = 1f + sound.pumpPitchStep * Mathf.Min(m_PumpStreak - 1, 10);
+                sound.Play(sound.pump, rise);
+                sound.Play(sound.grow, rise);
+                Haptics.Medium();
+                GrowPops(r.added);
+                GrowPops(r.merged);
+                if (cameraFramer != null) cameraFramer.Punch(0.25f);
+            }
+
+            AfterChange();
+            HintAfterStep(dir);
+            return true;
         }
 
         void AfterChange()
@@ -403,6 +435,7 @@ namespace ExpandPuzzle
             {
                 m_Solved = true;
                 if (!Levels.IsTemporary(m_LevelIndex)) SaveBestStars(m_LevelIndex, Rules.StarsFor(m_Level, m_Moves));
+                BoostersOnSolved();
                 StartCoroutine(WinRoutine());
             }
         }
@@ -533,7 +566,7 @@ namespace ExpandPuzzle
             yield return new WaitForSeconds(nextLevelDelay + (ui != null ? ui.WinExtraTime : 0f));
 
             // 4. Wipe to the next level (in its own colour). A level under test simply starts again.
-            int next = Levels.IsTemporary(m_LevelIndex) ? m_LevelIndex : (m_LevelIndex + 1) % Levels.Count;
+            int next = Levels.IsTemporary(m_LevelIndex) ? m_LevelIndex : Levels.NextInSection(m_LevelIndex);
             Color wipe = theme.SurfaceColor(next);
             yield return Fade(wipe, 0f, 1f, 0.24f);
             BuildLevel(next, true);
@@ -557,7 +590,7 @@ namespace ExpandPuzzle
 
         void PushUndo()
         {
-            var snap = new Snapshot { cells = new Vector2Int[m_Cells.Count], colors = new int[m_Cells.Count], head = m_Head };
+            var snap = new Snapshot { cells = new Vector2Int[m_Cells.Count], colors = new int[m_Cells.Count], head = m_Head, moves = m_Moves };
             int i = 0;
             foreach (var c in m_Cells)
             {
@@ -565,6 +598,7 @@ namespace ExpandPuzzle
                 snap.colors[i] = c.Value;
                 i++;
             }
+            snap.pieces = m_State != null ? m_State.Clone() : null;
             m_Undo.Push(snap);
         }
 
@@ -575,13 +609,15 @@ namespace ExpandPuzzle
             m_Cells.Clear();
             for (int i = 0; i < snap.cells.Length; i++) m_Cells[snap.cells[i]] = snap.colors[i];
             m_Head = snap.head;
-            m_Moves++;   // taking a move back is not free: it counts as a move
+            m_Moves = snap.moves;   // a step back really is one: the move count goes back too
             m_Blob.Snap(m_Cells, m_Head);
             m_PumpStreak = 0;
             sound.Play(sound.undo);
             UpdateMovesUi();
             RefreshFeedback(false);
             m_LastStars = Rules.StarsFor(m_Level, m_Moves);
+            PiecesAfterUndo(snap.pieces);
+            BoostersAfterUndo();
         }
     }
 }

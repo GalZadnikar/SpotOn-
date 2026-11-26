@@ -2574,6 +2574,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: bd891754482a901469fa1c8e239bf2b9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ExpandPuzzle.GameManager
+  boosters: 1
+  freeRefillWhenEmpty: 1
+  hintMoves: 3
   input: {fileID: 1725995650}
   ui: {fileID: 675234150}
   cameraFramer: {fileID: 1725995649}
@@ -2751,6 +2754,41 @@ MonoBehaviour:
   click:
     clip: {fileID: 8300000, guid: 0994c12e202f342459a4212e7287f7e8, type: 3}
     volume: 0.5
+    pitch: 1
+    pitchJitter: 0
+  boosterSelect:
+    clip: {fileID: 8300000, guid: b43d102aac6b145468dcaa94a5cccae1, type: 3}
+    volume: 0.55
+    pitch: 1
+    pitchJitter: 0
+  boosterThrow:
+    clip: {fileID: 8300000, guid: 81652031b64c342cc8dbc59c138d77c5, type: 3}
+    volume: 0.6
+    pitch: 1
+    pitchJitter: 0
+  boosterPop:
+    clip: {fileID: 8300000, guid: 3becec1909f194046945d85ac1077772, type: 3}
+    volume: 0.85
+    pitch: 1
+    pitchJitter: 0
+  boosterClear:
+    clip: {fileID: 8300000, guid: 79180f511d89441b9aa23ccae1992fe0, type: 3}
+    volume: 0.75
+    pitch: 1
+    pitchJitter: 0
+  boosterHint:
+    clip: {fileID: 8300000, guid: 7bd6b897eb5ca4b7d88a205c4a51640c, type: 3}
+    volume: 0.65
+    pitch: 1
+    pitchJitter: 0
+  boosterDeny:
+    clip: {fileID: 8300000, guid: 7e9ee6dc04a5d40d1a5dfc4beb9865e7, type: 3}
+    volume: 0.5
+    pitch: 1
+    pitchJitter: 0
+  boosterRefill:
+    clip: {fileID: 8300000, guid: 0c008ee3ee72a4362a35be25fa5de043, type: 3}
+    volume: 0.6
     pitch: 1
     pitchJitter: 0
 --- !u!1 &1893884389

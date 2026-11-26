@@ -83,12 +83,14 @@ namespace ExpandPuzzle
 
         // ---------------------------------------------------------------- top bar
 
-        public void SetLevel(int number, int total)
+        /// <param name="prefix">Word in front of the number: "LEVEL" for the campaign, the section's name otherwise.</param>
+        /// <param name="index">Position of the level in the whole list (for the overview). -1 = number - 1.</param>
+        public void SetLevel(int number, int total, string prefix = "LEVEL", int index = -1)
         {
             if (levelLabel != null)
             {
                 // A new level number pops in: the old one stays for the first half of the pop, then flips.
-                string text = "LEVEL " + number;
+                string text = prefix + " " + number;
                 if (m_LevelShown > 0 && m_LevelShown != number)
                 {
                     m_LevelText = text;
@@ -101,7 +103,7 @@ namespace ExpandPuzzle
                 }
                 m_LevelShown = number;
             }
-            m_CurrentLevel = number - 1;
+            m_CurrentLevel = index >= 0 ? index : number - 1;
             HideWin();
             ClosePicker();
         }
@@ -410,6 +412,10 @@ namespace ExpandPuzzle
         Func<int, int> m_StarsOf;
         Func<int, bool> m_Unlocked;
         int m_Page;
+        // Pages follow the sections (Base, Test, ...): every section starts a new page.
+        readonly System.Collections.Generic.List<int> m_EntryPage = new System.Collections.Generic.List<int>();
+        readonly System.Collections.Generic.List<string> m_PageSection = new System.Collections.Generic.List<string>();
+        Text m_PickerTitle;
         int m_CurrentLevel;
 
         static readonly Color PickerInk = new Color(0.2f, 0.26f, 0.3f, 1f);
@@ -420,7 +426,10 @@ namespace ExpandPuzzle
         /// <paramref name="starsOf"/> gives the best stars so far (0 = not solved yet),
         /// <paramref name="unlocked"/> says whether a level may be played (null = all open).
         /// </summary>
-        public void BuildPicker(int levelCount, Func<int, bool> usesColor, Func<int, int> starsOf = null, Func<int, bool> unlocked = null)
+        /// <param name="sectionOf">Name of the section a level belongs to (null = one list).</param>
+        /// <param name="numberOf">Number shown on a level's button (null = its place in the whole list).</param>
+        public void BuildPicker(int levelCount, Func<int, bool> usesColor, Func<int, int> starsOf = null, Func<int, bool> unlocked = null,
+            Func<int, string> sectionOf = null, Func<int, int> numberOf = null)
         {
             if (m_PickerBuilt || pickerGrid == null) return;
             m_PickerBuilt = true;
@@ -434,15 +443,34 @@ namespace ExpandPuzzle
             Font useFont = font != null ? font : (levelLabel != null ? levelLabel.font : null);
 
             Transform title = panel != null ? panel.Find("Title") : null;
-            if (title != null && title.GetComponent<Text>() != null) title.GetComponent<Text>().text = "SELECT LEVEL";
+            m_PickerTitle = title != null ? title.GetComponent<Text>() : null;
+            if (m_PickerTitle != null) m_PickerTitle.text = "SELECT LEVEL";
 
             // Room under each button for the stars that hang over its bottom edge.
             var grid = pickerGrid.GetComponent<GridLayoutGroup>();
             if (grid != null) grid.spacing = new Vector2(grid.spacing.x, 46f);
 
+            string lastSection = null;
+            int onThisPage = 0;
+            var pageFirst = new System.Collections.Generic.List<int>();
+            var pageLast = new System.Collections.Generic.List<int>();
             for (int i = 0; i < levelCount; i++)
             {
                 int index = i;
+                string section = sectionOf != null ? sectionOf(i) : "";
+                int number = numberOf != null ? numberOf(i) : i + 1;
+                if (i == 0 || section != lastSection || onThisPage >= PerPage)
+                {
+                    m_PageSection.Add(section);
+                    pageFirst.Add(number);
+                    pageLast.Add(number);
+                    onThisPage = 0;
+                }
+                lastSection = section;
+                onThisPage++;
+                pageLast[pageLast.Count - 1] = number;
+                m_EntryPage.Add(m_PageSection.Count - 1);
+
                 var entry = new PickerEntry();
                 entry.colored = usesColor != null && usesColor(i);
 
@@ -460,7 +488,7 @@ namespace ExpandPuzzle
                     if (LevelPicked != null) LevelPicked(index);
                 });
 
-                entry.label = PickerText(entry.go.transform, useFont, (i + 1).ToString(), 52);
+                entry.label = PickerText(entry.go.transform, useFont, number.ToString(), 52);
                 entry.label.rectTransform.offsetMin = new Vector2(0f, 18f);
 
                 entry.stars = new Image[3];
@@ -509,9 +537,9 @@ namespace ExpandPuzzle
                     button.targetGraphic = img;
                     PressScale.AddTo(button);
                     button.onClick.AddListener(() => { m_Page = page; RefreshPicker(); });
-                    int first = p * PerPage + 1;
-                    int last = Mathf.Min(levelCount, (p + 1) * PerPage);
-                    PickerText(tabGo.transform, useFont, first + " - " + last, 36);
+                    int first = pageFirst[p];
+                    int last = pageLast[p];
+                    PickerText(tabGo.transform, useFont, TabLabel(p, first, last), 36);
                     m_Tabs.Add(img);
                 }
             }
@@ -520,7 +548,17 @@ namespace ExpandPuzzle
         }
 
         int PerPage { get { return Mathf.Max(1, levelsPerPage); } }
-        int PageCount { get { return Mathf.Max(1, (m_Entries.Count + PerPage - 1) / PerPage); } }
+        int PageCount { get { return Mathf.Max(1, m_PageSection.Count); } }
+
+        /// <summary>Text on a page tab: the number range for the first section, the section's name for the others.</summary>
+        string TabLabel(int page, int first, int last)
+        {
+            string section = m_PageSection[page];
+            if (string.IsNullOrEmpty(section) || section == m_PageSection[0]) return first + " - " + last;
+            bool alone = (page == 0 || m_PageSection[page - 1] != section) &&
+                         (page == m_PageSection.Count - 1 || m_PageSection[page + 1] != section);
+            return alone ? section.ToUpper() : section.ToUpper() + " " + first + "-" + last;
+        }
 
         static Text PickerText(Transform parent, Font useFont, string value, int size)
         {
@@ -545,10 +583,15 @@ namespace ExpandPuzzle
         public void RefreshPicker()
         {
             m_Page = Mathf.Clamp(m_Page, 0, PageCount - 1);
+            if (m_PickerTitle != null && m_PageSection.Count > 0)
+            {
+                string shown = m_PageSection[m_Page];
+                m_PickerTitle.text = string.IsNullOrEmpty(shown) ? "SELECT LEVEL" : shown.ToUpper() + " LEVELS";
+            }
             for (int i = 0; i < m_Entries.Count; i++)
             {
                 PickerEntry e = m_Entries[i];
-                bool onPage = i / PerPage == m_Page;
+                bool onPage = m_EntryPage[i] == m_Page;
                 if (e.go.activeSelf != onPage) e.go.SetActive(onPage);
                 if (!onPage) continue;
 
@@ -623,7 +666,7 @@ namespace ExpandPuzzle
             if (!debugLevelPicker || pickerRoot == null) return;
             pickerRoot.SetActive(!pickerRoot.activeSelf);
             if (!pickerRoot.activeSelf) return;
-            m_Page = m_CurrentLevel / PerPage;   // open on the page of the level being played
+            m_Page = m_CurrentLevel >= 0 && m_CurrentLevel < m_EntryPage.Count ? m_EntryPage[m_CurrentLevel] : 0;   // open on the page of the level being played
             RefreshPicker();
             if (m_ToggleRefresh != null) m_ToggleRefresh();
         }

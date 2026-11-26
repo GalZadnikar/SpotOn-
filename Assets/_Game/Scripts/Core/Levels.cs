@@ -15,6 +15,8 @@ namespace ExpandPuzzle
         public string note;
         /// <summary>The designer's own difficulty rating: "" (not rated), "1".."5" or "X" (bad level).</summary>
         public string rating;
+        /// <summary>Which list the level belongs to: "" or "Base" = the campaign, "Test" = experiments. One word.</summary>
+        public string section;
 
         public LevelDef(int par, string[] rows, string[] colors = null)
         {
@@ -23,6 +25,7 @@ namespace ExpandPuzzle
             this.colors = colors;
             this.note = "";
             this.rating = "";
+            this.section = "";
         }
     }
 
@@ -917,13 +920,58 @@ namespace ExpandPuzzle
             }),
         };
 
+        public const string BaseSection = "Base";
+
+        /// <summary>True for the campaign: levels without a section, or marked "Base".</summary>
+        public static bool IsBase(string section)
+        {
+            return string.IsNullOrEmpty(section) || section == BaseSection;
+        }
+
+        /// <summary>The list a level belongs to: "Base" for the campaign, "Test" for experiments.</summary>
+        public static string SectionOf(int index)
+        {
+            if (index < 0 || index >= List.Count) return BaseSection;
+            string s = List[index].section;
+            return IsBase(s) ? BaseSection : s;
+        }
+
+        /// <summary>1-based number of a level inside its own section.</summary>
+        public static int NumberInSection(int index)
+        {
+            string section = SectionOf(index);
+            int n = 0;
+            for (int i = 0; i <= index && i < List.Count; i++)
+                if (SectionOf(i) == section) n++;
+            return Mathf.Max(1, n);
+        }
+
+        /// <summary>The level after this one in the same section (after the last one comes the section's first).</summary>
+        public static int NextInSection(int index)
+        {
+            string section = SectionOf(index);
+            for (int step = 1; step <= List.Count; step++)
+            {
+                int i = (index + step) % List.Count;
+                if (i != s_Temporary && SectionOf(i) == section) return i;
+            }
+            return index;
+        }
+
+        /// <summary>"Level 12" for the campaign, "Test 3" for a level of the Test section.</summary>
+        public static string DisplayName(int index)
+        {
+            string section = SectionOf(index);
+            return (section == BaseSection ? "Level" : section) + " " + NumberInSection(index);
+        }
+
         public static int Count { get { return List.Count; } }
 
         public static LevelData Load(int index)
         {
             int count = List.Count;
             index = ((index % count) + count) % count;
-            LevelData level = LevelData.Parse("Level " + (index + 1), List[index].rows, List[index].colors);
+            LevelData level = LevelData.Parse(DisplayName(index), List[index].rows, List[index].colors);
             level.par = List[index].par;
             return level;
         }
@@ -984,7 +1032,7 @@ namespace ExpandPuzzle
 
         static LevelDef ParseHeader(string line)
         {
-            var def = new LevelDef { note = "", rating = "" };
+            var def = new LevelDef { note = "", rating = "", section = "" };
             string body = line.Substring(3).Trim();
 
             int noteAt = body.IndexOf("note=");
@@ -1000,6 +1048,7 @@ namespace ExpandPuzzle
                 string key = token.Substring(0, eq), value = token.Substring(eq + 1);
                 if (key == "par") int.TryParse(value, out def.par);
                 else if (key == "rating") def.rating = value;
+                else if (key == "section") def.section = value;
             }
             return def;
         }
@@ -1009,12 +1058,14 @@ namespace ExpandPuzzle
             var sb = new StringBuilder();
             sb.Append("; ExpandPuzzle levels. Edit with Tools > Expand Puzzle > Level Editor (or by hand).\n");
             sb.Append("; '=== par=N rating=R note=...' starts a level, then the map rows; '---' starts the optional colour layer.\n");
+            sb.Append("; 'section=Test' in the header puts a level in the Test list (experiments); without it the level is in Base.\n");
             sb.Append("; Map: # wall, . floor, H blob head, P blob body, T target, X forbidden, ^ v < > pump.\n");
+            sb.Append(";      W movable wall (drag it), B loose blob body (push into it to merge), * trap (destroys one blob cell).\n");
             sb.Append("; Colour layer: a digit on a pump, target or blob cell (0 coral, 1 green, 2 purple, 3 orange).\n\n");
             for (int i = 0; i < levels.Count; i++)
             {
                 LevelDef d = levels[i];
-                sb.Append("=== par=").Append(d.par).Append(" rating=").Append(d.rating ?? "")
+                sb.Append("=== par=").Append(d.par).Append(" rating=").Append(d.rating ?? "").Append(Levels.IsBase(d.section) ? "" : " section=" + d.section.Replace(" ", ""))
                   .Append(" note=").Append((d.note ?? "").Replace("\n", " ")).Append('\n');
                 if (d.rows != null)
                     for (int r = 0; r < d.rows.Length; r++) sb.Append(d.rows[r]).Append('\n');

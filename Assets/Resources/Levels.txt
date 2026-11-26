@@ -1,6 +1,8 @@
 ; ExpandPuzzle levels. Edit with Tools > Expand Puzzle > Level Editor (or by hand).
 ; '=== par=N rating=R note=...' starts a level, then the map rows; '---' starts the optional colour layer.
+; 'section=Test' in the header puts a level in the Test list (experiments); without it the level is in Base.
 ; Map: # wall, . floor, H blob head, P blob body, T target, X forbidden, ^ v < > pump.
+;      W movable wall (drag it), B loose blob body (push into it to merge), * trap (destroys one blob cell).
 ; Colour layer: a digit on a pump, target or blob cell (0 coral, 1 green, 2 purple, 3 orange).
 
 === par=3 rating=1 note=walk to the pump, push into it once, park on the marks.
@@ -958,4 +960,89 @@
 .0........
 ..........
 ..........
+
+=== par=9 rating= section=Test note=MOVABLE WALL 1: drag the wall with the yellow studs next to the blob so the pump can only grow one of its two cells - that makes the L.
+##v####
+#.H...#
+>.....#
+#..W..#
+#..TX.#
+#..TT.#
+#######
+
+=== par=12 rating= section=Test note=MOVABLE WALL 2: an S shape needs the wall twice - once under the pump at the top, once at the side pump.
+###v###
+#.....#
+>H....#
+#..W..#
+#.TTX.#
+#.XTT.#
+#######
+
+=== par=14 rating= section=Test note=MOVABLE WALL 3: a T. The fixed wall trims one arm, the movable wall the other - and afterwards it is in the way and has to be moved again.
+##v####
+#.....#
+##....#
+>H..W.#
+#.....#
+#XTTTX#
+#XXTXX#
+#######
+
+=== par=8 rating= section=Test note=LOOSE BODY 1: push into the sleeping piece to take it in. From above it makes an upright pair, from the side a flat one - only one fits.
+#######
+#H....#
+#.....#
+#..B..#
+#.....#
+#...T.#
+#...T.#
+#######
+
+=== par=9 rating= section=Test note=LOOSE BODY 2: pump first, merge second. Merging first and pumping after gives a square, which does not fit.
+#########
+#.......#
+>H......#
+#...B...#
+#.....TT#
+#.....XT#
+#########
+
+=== par=12 rating= section=Test note=LOOSE BODY 3: two pieces. Straight down from the start glues on a bar - go round and take the first piece from the side to get the T.
+#########
+#..H....#
+#.......#
+#..B....#
+#..B..B.#
+#.......#
+#..XTX..#
+#..TTT..#
+#########
+
+=== par=7 rating= section=Test note=TRAP 1: the square is one cell too big. Drive the right corner over the trap; the wrong corner ruins the shape.
+########
+#HP....#
+#PP.*..#
+#......#
+#....TX#
+#....TT#
+########
+
+=== par=17 rating= section=Test note=TRAP 2: the trap sits in front of the pump and eats the cell that would grow there - if it is still armed. Walking over it wastes it, so come to the pump from below.
+#########
+#......P#
+>.*....H#
+#.......#
+#...TT..#
+#...TX..#
+#########
+
+=== par=8 rating= section=Test note=TRAP 3: cut the bar in half - take the middle cell over the trap, the two ends stay and still move as one.
+#########
+>H......#
+#.......#
+#...*...#
+#.......#
+#..TXT..#
+#########
 

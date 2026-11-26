@@ -41,6 +41,15 @@ namespace ExpandPuzzle
         public readonly List<Vector2Int> startCells = new List<Vector2Int>();
         public readonly List<int> startColors = new List<int>();
 
+        /// <summary>Movable walls ('W'): solid like a wall, but the player drags them to another floor cell.</summary>
+        public readonly List<Vector2Int> blocks = new List<Vector2Int>();
+        /// <summary>Loose blob body ('B'): cell -> colour. It joins the blob when the blob pushes into it.</summary>
+        public readonly Dictionary<Vector2Int, int> loose = new Dictionary<Vector2Int, int>();
+        /// <summary>Traps ('*'): the blob cell that lands on one is destroyed, and the trap is used up.</summary>
+        public readonly HashSet<Vector2Int> traps = new HashSet<Vector2Int>();
+
+        public bool HasPieces { get { return blocks.Count + loose.Count + traps.Count > 0; } }
+
         public bool UsesColor
         {
             get
@@ -77,6 +86,9 @@ namespace ExpandPuzzle
             foreach (var f in forbidden) r.forbidden.Add(RotateCell(f));
             foreach (var c in startCells) r.startCells.Add(RotateCell(c));
             r.startColors.AddRange(startColors);
+            foreach (var wb in blocks) r.blocks.Add(RotateCell(wb));
+            foreach (var lb in loose) r.loose[RotateCell(lb.Key)] = lb.Value;
+            foreach (var tr in traps) r.traps.Add(RotateCell(tr));
             return r;
         }
 
@@ -91,6 +103,8 @@ namespace ExpandPuzzle
         ///   H  blob head       P  extra blob cell
         ///   T  target          X  forbidden tile (must stay uncovered)
         ///   ^ v &lt; &gt;  pump inside a wall, blowing in that direction
+        ///   W  movable wall    B  loose blob body (joins the blob when pushed into)
+        ///   *  trap (destroys the blob cell that lands on it, then it is gone)
         ///
         /// Optional colour layer, same size: a digit on top of a pump, target or blob cell gives it
         /// that colour (0 = the blob's own colour, 1 = second colour, ...). Anything else = no colour.
@@ -132,6 +146,9 @@ namespace ExpandPuzzle
                         case 'P': lvl.floor[x, y] = true; body.Add(c); bodyColors.Add(Mathf.Max(0, color)); break;
                         case 'T': lvl.floor[x, y] = true; lvl.targets[c] = color; break;
                         case 'X': lvl.floor[x, y] = true; lvl.forbidden.Add(c); break;
+                        case 'W': lvl.floor[x, y] = true; lvl.blocks.Add(c); break;
+                        case 'B': lvl.floor[x, y] = true; lvl.loose[c] = Mathf.Max(0, color); break;
+                        case '*': lvl.floor[x, y] = true; lvl.traps.Add(c); break;
                         case '^': lvl.pumps.Add(new PumpData { cell = c, dir = Vector2Int.up, color = color }); break;
                         case 'v': lvl.pumps.Add(new PumpData { cell = c, dir = Vector2Int.down, color = color }); break;
                         case '<': lvl.pumps.Add(new PumpData { cell = c, dir = Vector2Int.left, color = color }); break;

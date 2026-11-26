@@ -92,8 +92,11 @@ namespace ExpandPuzzle
             return transform.TransformPoint(new Vector3(c.x, y, c.y));
         }
 
+        GameTheme m_Theme;
+
         public void Build(LevelData level, GameTheme theme)
         {
+            m_Theme = theme;
             var all = new List<Vector2Int>();
             var walls = new List<Vector2Int>();
 
@@ -379,6 +382,96 @@ namespace ExpandPuzzle
                 tile.transform.localPosition = p;
                 float s = 1f + tile.bulge * 0.08f + hint * 0.035f;
                 tile.transform.localScale = new Vector3(s, 1f + tile.bulge * 0.6f, s);
+            }
+        }
+
+        // ---------------------------------------------------------------- boosters
+
+        /// <summary>A forbidden tile turns into plain floor: its cross flies off and the tile changes colour.</summary>
+        public void ClearForbidden(Vector2Int cell)
+        {
+            for (int i = 0; i < m_Tiles.Count; i++)
+            {
+                Tile tile = m_Tiles[i];
+                if (tile.cell != cell || tile.transform == null) continue;
+                var renderer = tile.transform.GetComponent<MeshRenderer>();
+                if (renderer != null && m_Theme != null) renderer.sharedMaterial = m_Theme.floorPad;
+                int n = 0;
+                foreach (Transform child in tile.transform)
+                    StartCoroutine(FlyOff(child, n++ == 0 ? 1f : -1f));
+                return;
+            }
+        }
+
+        IEnumerator FlyOff(Transform part, float side)
+        {
+            Vector3 start = part.localPosition, scale = part.localScale;
+            Quaternion rotation = part.localRotation;
+            float t = 0f;
+            while (t < 1f && part != null)
+            {
+                t += Time.deltaTime / 0.45f;
+                float k = Mathf.Clamp01(t);
+                part.localPosition = start + new Vector3(side * 0.5f * k, 1.6f * k - 1.5f * k * k, 0.25f * k);
+                part.localRotation = rotation * Quaternion.Euler(k * 540f * side, k * 300f, 0f);
+                part.localScale = scale * (1f - k * k);
+                yield return null;
+            }
+            if (part != null) Destroy(part.gameObject);
+        }
+
+        readonly List<Transform> m_Markers = new List<Transform>();
+        readonly List<float> m_MarkerHeight = new List<float>();
+        int m_MarkersShown;
+
+        /// <summary>
+        /// Shows a bouncing white dot on every cell the player may tap (picking a booster target).
+        /// <paramref name="heights"/> gives the height of each dot above the floor.
+        /// </summary>
+        public void ShowMarkers(IList<Vector2Int> cells, IList<float> heights)
+        {
+            for (int i = 0; i < cells.Count; i++)
+            {
+                if (i >= m_Markers.Count)
+                {
+                    var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                    go.name = "Tap Marker";
+                    StripCollider(go);
+                    go.transform.SetParent(transform, false);
+                    var r = go.GetComponent<MeshRenderer>();
+                    r.sharedMaterial = m_Theme != null ? m_Theme.eyeShine : null;
+                    r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                    r.receiveShadows = false;
+                    m_Markers.Add(go.transform);
+                    m_MarkerHeight.Add(0f);
+                }
+                m_Markers[i].gameObject.SetActive(true);
+                m_Markers[i].localPosition = new Vector3(cells[i].x, heights[i], cells[i].y);
+                m_Markers[i].localScale = Vector3.zero;
+                m_MarkerHeight[i] = heights[i];
+            }
+            for (int i = cells.Count; i < m_Markers.Count; i++) m_Markers[i].gameObject.SetActive(false);
+            m_MarkersShown = cells.Count;
+        }
+
+        public void HideMarkers()
+        {
+            for (int i = 0; i < m_Markers.Count; i++) m_Markers[i].gameObject.SetActive(false);
+            m_MarkersShown = 0;
+        }
+
+        void Update()
+        {
+            // The tap markers breathe, one after another, so the eye is drawn across all of them.
+            for (int i = 0; i < m_MarkersShown; i++)
+            {
+                Transform m = m_Markers[i];
+                float beat = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 6.5f - i * 0.7f);
+                float size = Mathf.Lerp(m.localScale.x, 0.3f + 0.12f * beat, Time.unscaledDeltaTime * 14f);
+                m.localScale = new Vector3(size, 0.006f, size);
+                Vector3 p = m.localPosition;
+                p.y = m_MarkerHeight[i] + 0.03f * beat;
+                m.localPosition = p;
             }
         }
 
